@@ -128,6 +128,11 @@ impl HostState {
         self.runs.get(session_id)
     }
 
+    /// Each shown session, in the sequence of the daemon.
+    pub fn shown_sessions(&self) -> impl Iterator<Item = &Session> {
+        self.sessions.iter().filter(|session| is_shown(session))
+    }
+
     /// The shown sessions of a Project, or of no Project, in the sequence of
     /// the daemon.
     pub fn sessions_of<'a>(&'a self, view: &'a ProjectView) -> impl Iterator<Item = &'a Session> {

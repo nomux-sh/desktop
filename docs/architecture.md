@@ -104,6 +104,21 @@ The button sends `HostRequest::ReplaceDaemon`. The connection thread stops the d
 - **Failures.** Before the first list of the sessions a failure is the text of the empty state. After it, a dialog of the system shows it, because the main area shows a terminal.
 - **The name of a row.** The name of the session, else the name of its directory (`~` for the home directory), else its program. A shell row shows, after the name, the tool that the daemon reports for the session, else the program of its command. The protocol has no foreground program of the terminal: `AgentStatus.tool` is the only program name that a client gets.
 
+## Attention list
+
+The list at the top of the sidebar shows the sessions of all Projects that need the user. `nomux-desktop-model::attention` builds it from the Agent runs of `HostState`; the sidebar view paints it below the header as rows of the same anatomy as a Session row, under the label "Attention".
+
+- Order: needs you, then done and not seen, then working. In each group the oldest state (`since_ms`) comes first, thus the session that waits longest is first; the session identifier breaks a tie. A session in another state (error, idle, no process) is not in the list. The list is hidden when it is empty.
+- The jump key opens the tab of the next session that needs you, after the active session in the list, and wraps around. When the active session is not one of them, it goes to the first. The tab gets the focus. The jump has no target when no session needs you.
+- A session in the list has a row in the list and a row in the tree of its Project. Both are cached views and render again only when their values change, from the same events of the daemon. No clock and no timer: the list changes only with an event.
+- The daemon marks a result as seen when a client attaches to the session, and when an attach ends. It has no request that marks a session as seen without an attach (open item of `spec/control.md` of the proto repository). A session without a tab gets seen when the user opens it: the new tab attaches. A done session that has a hidden tab stays "done, not seen" until its tab closes, because the tab is attached since before the result came. The client does not work around this with a detach and an attach.
+
+| Action | macOS | Linux |
+|---|---|---|
+| Open the next session that needs you | Cmd-J | Ctrl-Shift-J |
+
+Ctrl-J is a line feed for the program in a terminal, thus Linux uses Ctrl-Shift-J.
+
 ## The frame budget
 
 The client does no work when nothing changes. A frame costs a wake-up of the UI thread, a layout and a paint, thus each rule below removes frames, not only paint time.

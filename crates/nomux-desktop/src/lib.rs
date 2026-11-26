@@ -95,7 +95,10 @@ actions!(
         /// Activates the eighth tab.
         ActivateTab8,
         /// Activates the last tab.
-        ActivateLastTab
+        ActivateLastTab,
+        /// Opens the tab of the next session that needs the user, in any
+        /// Project.
+        JumpToAttention
     ]
 );
 
@@ -110,6 +113,8 @@ struct TabKeys {
     previous: &'static str,
     left: &'static str,
     right: &'static str,
+    /// The jump to the next session that needs the user.
+    attention: &'static str,
     /// The tabs 1 to 8, then the last tab.
     numbers: [&'static str; 9],
 }
@@ -125,6 +130,7 @@ const MACOS_TAB_KEYS: TabKeys = TabKeys {
     previous: "cmd-shift-[",
     left: "cmd-shift-left",
     right: "cmd-shift-right",
+    attention: "cmd-j",
     numbers: [
         "cmd-1", "cmd-2", "cmd-3", "cmd-4", "cmd-5", "cmd-6", "cmd-7", "cmd-8", "cmd-9",
     ],
@@ -141,6 +147,8 @@ const LINUX_TAB_KEYS: TabKeys = TabKeys {
     previous: "ctrl-pageup",
     left: "ctrl-shift-pageup",
     right: "ctrl-shift-pagedown",
+    // Ctrl-J is a line feed for the program in the terminal.
+    attention: "ctrl-shift-j",
     numbers: [
         "alt-1", "alt-2", "alt-3", "alt-4", "alt-5", "alt-6", "alt-7", "alt-8", "alt-9",
     ],
@@ -184,6 +192,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new(keys.previous, PreviousTab, context),
         KeyBinding::new(keys.left, MoveTabLeft, context),
         KeyBinding::new(keys.right, MoveTabRight, context),
+        KeyBinding::new(keys.attention, JumpToAttention, context),
         KeyBinding::new(one, ActivateTab1, context),
         KeyBinding::new(two, ActivateTab2, context),
         KeyBinding::new(three, ActivateTab3, context),
