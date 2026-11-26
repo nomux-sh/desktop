@@ -1,0 +1,23 @@
+# A build and test environment for a computer that does not have the system
+# packages of GPUI. README.md shows how to use it.
+FROM registry.fedoraproject.org/fedora:44
+
+# Build: a C linker and the libraries that GPUI links on Linux.
+# Run: the X11 keyboard library, the Vulkan loader and the software Vulkan
+# driver (lavapipe), fontconfig and fonts.
+# Tests and measurements: Xvfb as the display, xdotool for keys, xwd and
+# netpbm for screenshots, htop and vim as full-screen programs.
+RUN dnf install -y --setopt=install_weak_deps=False \
+        gcc gcc-c++ pkgconf-pkg-config git freetype-devel \
+        libxcb-devel libxkbcommon-devel libxkbcommon-x11-devel libxkbcommon-x11 \
+        vulkan-loader mesa-vulkan-drivers fontconfig dejavu-sans-mono-fonts \
+        xorg-x11-server-Xvfb xdotool xwd netpbm-progs \
+        htop vim-enhanced procps-ng \
+    && dnf clean all
+
+# The channel of rust-toolchain.toml. run.sh passes it.
+ARG TOOLCHAIN
+ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo PATH=/opt/cargo/bin:$PATH
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+        | sh -s -- -y --profile minimal --default-toolchain "$TOOLCHAIN" \
+            --component clippy,rustfmt

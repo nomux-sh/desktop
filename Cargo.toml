@@ -1,0 +1,62 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+# The minimum supported Rust version is the pinned toolchain in
+# `rust-toolchain.toml`: the nomux crates need it.
+rust-version = "1.100"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/nomux-sh/desktop"
+authors = ["The nomux Authors"]
+# The client is a binary; no crate of this workspace goes to crates.io.
+publish = false
+
+[workspace.dependencies]
+nomux-desktop-model = { path = "crates/nomux-desktop-model" }
+nomux-desktop-theme = { path = "crates/nomux-desktop-theme" }
+nomux-sidebar = { path = "crates/nomux-sidebar" }
+nomux-term-view = { path = "crates/nomux-term-view" }
+
+# GPUI: the `gpui-pre` line, exact pins of one weekly snapshot (Zed commit
+# f126950). gpui-component 0.11.0 pins the same pair. `deny.toml` bans the
+# other GPUI lines. Bump both together.
+gpui = { package = "gpui-pre", version = "=0.3.14", default-features = false }
+# Wayland and X11 on Linux; font-kit and runtime-compiled Metal shaders on
+# macOS (no Xcode Metal toolchain at build time).
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.14", default-features = false, features = ["wayland", "x11", "font-kit", "runtime_shaders"] }
+# The client side of the nomux protocol and the terminal state. Not on
+# crates.io: a revision of `main`, moved to a tag at the next release.
+nomux-client = { git = "https://github.com/nomux-sh/nomux", rev = "1d36b7d2fc96db3b568ba9f217011402afb9ec8d" }
+nomux-term = { git = "https://github.com/nomux-sh/nomux", rev = "1d36b7d2fc96db3b568ba9f217011402afb9ec8d" }
+# The design tokens and the shipped themes.
+nomux-theme = "=0.3.1"
+# The runtime of the connection thread: nomux-client is async.
+tokio = { version = "1.54.1", default-features = false, features = ["rt", "sync", "macros"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+dbg_macro = "deny"
+todo = "deny"
+
+# Development and test builds keep line numbers for a backtrace and no other
+# debug information. The dependencies have none. GPUI is large: this keeps
+# the target directory and the CI cache small.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true
