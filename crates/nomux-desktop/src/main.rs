@@ -5,6 +5,8 @@
 //! - `--appearance dark|light`: a fixed theme instead of the theme of the
 //!   system.
 //! - `--reduce-motion`: no motion, also when the system setting allows it.
+//! - `--window-size <width>x<height>`: the size of the window in logical
+//!   pixels instead of 1280x800.
 //! - `--measure <file>`: runs the measurement mode and writes its report
 //!   to the file. `measure.rs` describes the scenario.
 //! - `--capture <file>`: only in a build with the feature `frame-capture`.
@@ -22,6 +24,7 @@ use nomux_desktop::{Appearance, fonts};
 struct Options {
     appearance: Appearance,
     reduce_motion: bool,
+    window_size: (f32, f32),
     measure: Option<PathBuf>,
     #[cfg(feature = "frame-capture")]
     capture: Option<PathBuf>,
@@ -31,6 +34,7 @@ fn parse_options() -> Result<Options, String> {
     let mut options = Options {
         appearance: Appearance::System,
         reduce_motion: false,
+        window_size: nomux_desktop::WINDOW_SIZE,
         measure: None,
         #[cfg(feature = "frame-capture")]
         capture: None,
@@ -46,6 +50,13 @@ fn parse_options() -> Result<Options, String> {
                 };
             }
             "--reduce-motion" => options.reduce_motion = true,
+            "--window-size" => {
+                options.window_size = arguments
+                    .next()
+                    .as_deref()
+                    .and_then(parse_window_size)
+                    .ok_or("--window-size needs <width>x<height>, for example 1100x700")?;
+            }
             "--measure" => {
                 let path = arguments.next().ok_or("--measure needs a file")?;
                 options.measure = Some(PathBuf::from(path));
@@ -59,6 +70,14 @@ fn parse_options() -> Result<Options, String> {
         }
     }
     Ok(options)
+}
+
+/// `<width>x<height>` in logical pixels, each one at least 1.
+fn parse_window_size(text: &str) -> Option<(f32, f32)> {
+    let (width, height) = text.split_once('x')?;
+    let width: u16 = width.parse().ok()?;
+    let height: u16 = height.parse().ok()?;
+    (width > 0 && height > 0).then(|| (f32::from(width), f32::from(height)))
 }
 
 fn main() -> ExitCode {
@@ -84,7 +103,12 @@ fn main() -> ExitCode {
             }
         })
         .detach();
-        let handle = match nomux_desktop::open_window(options.appearance, measurement.clone(), cx) {
+        let handle = match nomux_desktop::open_window(
+            options.appearance,
+            options.window_size,
+            measurement.clone(),
+            cx,
+        ) {
             Ok(window) => window,
             Err(error) => {
                 eprintln!("nomux-desktop: the window cannot open: {error}");
