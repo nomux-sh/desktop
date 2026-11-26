@@ -198,7 +198,7 @@ fn is_agent(run: &AgentRun) -> bool {
 }
 
 /// The file name of the program of the session.
-fn program_name(session: &Session) -> String {
+pub(crate) fn program_name(session: &Session) -> String {
     session
         .command
         .first()
