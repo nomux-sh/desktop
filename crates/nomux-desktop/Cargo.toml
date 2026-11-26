@@ -20,6 +20,12 @@ nomux-term.workspace = true
 nomux-term-view.workspace = true
 tokio.workspace = true
 
+[features]
+# The option `--capture <file>`: writes a rendered frame to a PNG file. GPUI
+# renders a window to an image only with its test support, thus no package
+# has this feature.
+frame-capture = ["gpui/test-support", "gpui_platform/test-support"]
+
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
 gpui_platform = { workspace = true, features = ["test-support"] }

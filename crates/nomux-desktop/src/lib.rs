@@ -9,6 +9,8 @@
 //! - [`open_window`]: opens the window, as the binary does.
 
 mod attach;
+#[cfg(feature = "frame-capture")]
+pub mod capture;
 pub mod fonts;
 mod host_connection;
 pub mod measure;
