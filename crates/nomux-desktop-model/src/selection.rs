@@ -78,6 +78,11 @@ impl Selection {
         self.session = Some(session_id.to_owned());
     }
 
+    /// Selects no session: the shown Project has no session in a tab.
+    pub fn clear_session(&mut self) {
+        self.session = None;
+    }
+
     /// Makes the selection agree with the state of the host: a removed
     /// Project or session is not selected, and when nothing is selected, the
     /// first Project with sessions and its first session are.
