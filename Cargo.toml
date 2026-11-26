@@ -20,9 +20,11 @@ nomux-desktop-theme = { path = "crates/nomux-desktop-theme" }
 nomux-sidebar = { path = "crates/nomux-sidebar" }
 nomux-term-view = { path = "crates/nomux-term-view" }
 
-# GPUI: the `gpui-pre` line, exact pins of one weekly snapshot (Zed commit
-# f126950). gpui-component 0.11.0 pins the same pair. `deny.toml` bans the
-# other GPUI lines. Bump both together.
+# GPUI: the one place that chooses the GPUI line. The crates use the names
+# `gpui` and `gpui_platform` only. This is the `gpui-pre` line, exact pins of
+# one weekly snapshot (Zed commit f126950); gpui-component 0.11.0 pins the
+# same pair. `deny.toml` bans the lines that are not chosen. Bump both
+# together.
 gpui = { package = "gpui-pre", version = "=0.3.14", default-features = false }
 # Wayland and X11 on Linux; font-kit and runtime-compiled Metal shaders on
 # macOS (no Xcode Metal toolchain at build time).
