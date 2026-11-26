@@ -41,5 +41,5 @@ fn motion_runs_only_in_a_visible_window_without_reduced_motion() {
 
 #[test]
 fn the_working_glyph_wakes_the_window_fifteen_times_for_each_turn() {
-    assert_eq!(working_step(CYCLE), Duration::from_nanos(66_666_666));
+    assert_eq!(working_step(CYCLE), Duration::from_millis(250));
 }

@@ -25,9 +25,11 @@ impl MotionContext {
     }
 }
 
-/// The steps of one turn of the working glyph. The clock of the glyph wakes
-/// the window one time for each step.
-pub const WORKING_STEPS_PER_TURN: u32 = 15;
+/// The steps of one turn of the working glyph: a quarter turn for each
+/// step. The clock of the glyph wakes the window one time for each step,
+/// thus a working glyph costs 4 frames each second for a turn of 1 s, and
+/// the window does not draw at the display rate while agents work.
+pub const WORKING_STEPS_PER_TURN: u32 = 4;
 
 /// The interval of the clock of the working glyph, when one turn takes
 /// `turn`.
