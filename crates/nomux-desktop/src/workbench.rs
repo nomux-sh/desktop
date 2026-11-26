@@ -58,6 +58,8 @@ const AGE_INTERVAL: Duration = Duration::from_secs(60);
 struct MainArea {
     tab: Option<String>,
     message: String,
+    /// The version of a running daemon that is too old.
+    outdated_daemon: Option<String>,
 }
 
 /// The root view.
@@ -82,6 +84,9 @@ pub struct Workbench {
     /// list of the sessions has it.
     created_session: Option<String>,
     failure: Option<String>,
+    /// The version of a running daemon that is too old, until the user
+    /// replaces it.
+    outdated_daemon: Option<String>,
     home: Option<PathBuf>,
     measurement: Option<Measurement>,
     _tasks: Vec<Task<()>>,
@@ -174,6 +179,7 @@ impl Workbench {
             clock: None,
             created_session: None,
             failure: None,
+            outdated_daemon: None,
             home: std::env::var_os("HOME").map(PathBuf::from),
             measurement,
             _tasks: vec![updates_task, ages_task],
@@ -335,6 +341,7 @@ impl Workbench {
                 }
             }
             HostUpdate::SessionCreated(session) => self.created_session = Some(session.id),
+            HostUpdate::DaemonOutdated { running } => self.outdated_daemon = Some(running),
             HostUpdate::Failed(message) => self.failure = Some(message),
         }
         self.selection.reconcile(&self.host);
@@ -462,7 +469,11 @@ impl Workbench {
             .failure
             .clone()
             .unwrap_or_else(|| format!("A new session starts a shell in {place}."));
-        MainArea { tab, message }
+        MainArea {
+            tab,
+            message,
+            outdated_daemon: self.outdated_daemon.clone(),
+        }
     }
 
     fn main_area(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -471,6 +482,9 @@ impl Workbench {
             .main_area
             .clone()
             .unwrap_or_else(|| self.main_area_content());
+        if let Some(running) = &content.outdated_daemon {
+            return self.outdated_daemon_card(running, cx);
+        }
         let Some(tab) = self.tabs.active_terminal() else {
             return self.empty_state(&content.message, cx);
         };
@@ -496,6 +510,65 @@ impl Workbench {
                 div().flex_1().min_h_0().child(
                     AnyView::from(tab.clone()).cached(StyleRefinement::default().size_full()),
                 ),
+            )
+            .into_any_element()
+    }
+
+    /// Replaces the running daemon with the daemon of this app. The sessions
+    /// continue.
+    fn replace_daemon(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.outdated_daemon = None;
+        self.connection.send(HostRequest::ReplaceDaemon);
+        self.refresh(window, cx);
+    }
+
+    /// The card that tells the user that the daemon is too old, and the
+    /// button that replaces it.
+    fn outdated_daemon_card(&self, running: &str, cx: &mut Context<Self>) -> AnyElement {
+        let theme = &self.theme;
+        let font = theme.font(TextStyle::Title);
+        let meta = theme.font(TextStyle::Meta);
+        let workbench = cx.entity().downgrade();
+        let headline = format!("nomux daemon {running} is running");
+        let detail = format!(
+            "This app needs nomux {} or newer. Restart the daemon with the one in this app? \
+             Your sessions keep running.",
+            nomux_desktop_model::MINIMUM_DAEMON_VERSION
+        );
+        div()
+            .flex_1()
+            .h_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(theme.length(LengthToken::Space2))
+            .bg(theme.color(ColorToken::SurfaceBase))
+            .child(
+                div()
+                    .font_family(font.family)
+                    .font_weight(font.weight)
+                    .text_size(theme.font_size(TextStyle::Title))
+                    .text_color(theme.color(ColorToken::TextPrimary))
+                    .child(headline),
+            )
+            .child(
+                div()
+                    .max_w(theme.length(LengthToken::Space4) * 24.0)
+                    .font_family(meta.family)
+                    .text_size(theme.font_size(TextStyle::Meta))
+                    .text_color(theme.color(ColorToken::TextMuted))
+                    .text_center()
+                    .child(detail),
+            )
+            .child(
+                nomux_sidebar::button(theme, "Restart the daemon")
+                    .id("replace-daemon")
+                    .on_click(move |_, window, cx| {
+                        let _ = workbench.update(cx, |workbench, cx| {
+                            workbench.replace_daemon(window, cx);
+                        });
+                    }),
             )
             .into_any_element()
     }

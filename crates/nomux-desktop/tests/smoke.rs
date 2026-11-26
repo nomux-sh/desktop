@@ -11,25 +11,27 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::{AppContext, HeadlessAppContext, px, size};
-use nomux_desktop::{Appearance, HostConnection, Workbench, fonts};
+use nomux_desktop::{Appearance, HostConnection, HostRequest, HostUpdate, Workbench, fonts};
 
 const TEXT: &str = "nomux-smoke-text";
 /// The time without a change in which the window must ask for no frame.
 const IDLE: Duration = Duration::from_secs(2);
 /// The interval of the checks of the frame demand.
 const POLL: Duration = Duration::from_millis(20);
-const TEST_NAME: &str = "the_window_shows_the_screen_of_a_session";
 /// Set in the child process that runs the test with a temporary HOME.
 const IN_TEMPORARY_HOME: &str = "NOMUX_DESKTOP_SMOKE_HOME";
 
-/// Runs this test again in a child process whose HOME is a new directory:
-/// the daemon, its sessions and its files stay in that directory.
-fn run_in_temporary_home() {
-    let home = std::env::temp_dir().join(format!("nomux-desktop-smoke-{}", std::process::id()));
+/// Runs the test `test_name` again in a child process whose HOME is a new
+/// directory: the daemon, its sessions and its files stay in that directory.
+fn run_in_temporary_home(test_name: &str) {
+    let home = std::env::temp_dir().join(format!(
+        "nomux-desktop-smoke-{}-{test_name}",
+        std::process::id()
+    ));
     let runtime = home.join("run");
     std::fs::create_dir_all(&runtime).expect("a temporary HOME");
     let status = Command::new(std::env::current_exe().expect("the test binary"))
-        .args(["--exact", TEST_NAME, "--ignored", "--nocapture"])
+        .args(["--exact", test_name, "--ignored", "--nocapture"])
         .env(IN_TEMPORARY_HOME, &home)
         .env("HOME", &home)
         .env("XDG_RUNTIME_DIR", &runtime)
@@ -74,7 +76,7 @@ fn nomux(arguments: &[&str]) {
 #[ignore = "needs the nomux binaries on PATH and a Vulkan driver"]
 fn the_window_shows_the_screen_of_a_session() {
     if std::env::var_os(IN_TEMPORARY_HOME).is_none() {
-        return run_in_temporary_home();
+        return run_in_temporary_home("the_window_shows_the_screen_of_a_session");
     }
     nomux(&[
         "new",
@@ -146,4 +148,52 @@ fn the_window_shows_the_screen_of_a_session() {
     // frame has one colour.
     let first = screenshot.get_pixel(0, 0);
     assert!(screenshot.pixels().any(|pixel| pixel != first));
+}
+
+/// The output of `nomux` with `arguments`.
+fn nomux_output(arguments: &[&str]) -> String {
+    let output = Command::new("nomux")
+        .args(arguments)
+        .output()
+        .expect("the nomux CLI is on PATH");
+    assert!(output.status.success(), "nomux {arguments:?} failed");
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+/// The first session of a `Sessions` update, waiting at most 20 seconds.
+fn next_sessions(updates: &mut tokio::sync::mpsc::UnboundedReceiver<HostUpdate>) -> Vec<String> {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while Instant::now() < deadline {
+        match updates.try_recv() {
+            Ok(HostUpdate::Sessions(sessions)) => {
+                return sessions.into_iter().map(|session| session.id).collect();
+            }
+            Ok(_) => {}
+            Err(_) => std::thread::sleep(POLL),
+        }
+    }
+    panic!("no list of the sessions in 20 seconds");
+}
+
+#[test]
+#[ignore = "needs the nomux binaries on PATH"]
+fn a_replaced_daemon_keeps_the_sessions_and_their_processes() {
+    if std::env::var_os(IN_TEMPORARY_HOME).is_none() {
+        return run_in_temporary_home("a_replaced_daemon_keeps_the_sessions_and_their_processes");
+    }
+    nomux(&["new", "--", "sh", "-c", "exec cat"]);
+    let before = nomux_output(&["ls"]);
+    let (connection, mut updates) = HostConnection::start().expect("the connection thread starts");
+    let first = next_sessions(&mut updates);
+    assert_eq!(first.len(), 1);
+
+    connection.send(HostRequest::ReplaceDaemon);
+    let second = next_sessions(&mut updates);
+    let after = nomux_output(&["ls"]);
+    nomux(&["daemon", "stop"]);
+
+    assert_eq!(second, first, "the client lists the same session again");
+    // `nomux ls` shows the process identifier of the session: the process
+    // of the session did not end with the daemon.
+    assert_eq!(after, before);
 }
