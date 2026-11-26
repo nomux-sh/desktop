@@ -445,13 +445,16 @@ impl Workbench {
         let Some(tab) = self.tabs.active_terminal() else {
             return self.empty_state(&content.message, cx);
         };
-        let bar_height = theme.metrics().control_height + theme.length(LengthToken::Space1);
+        let bar_height = theme.metrics().control_height + theme.length(LengthToken::Space1) * 2.0;
         div()
             .flex_1()
             .min_w_0()
             .h_full()
             .flex()
             .flex_col()
+            .border_l(theme.length(LengthToken::LineWidth))
+            .border_color(theme.color(ColorToken::LineDivider))
+            .bg(theme.color(ColorToken::TerminalBackground))
             .child(
                 AnyView::from(self.tabs.bar().clone()).cached(
                     StyleRefinement::default()

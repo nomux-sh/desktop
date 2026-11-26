@@ -99,6 +99,14 @@ impl DesktopTheme {
         px(self.theme.font(style).size.pixels())
     }
 
+    /// The height of a terminal row as a multiple of `font.code.size`: the
+    /// value of the terminal of the preview page (`line-height: 1.5`).
+    /// `nomux-theme` 0.3.1 has no token for it.
+    #[must_use]
+    pub fn terminal_line_height(&self) -> f32 {
+        1.5
+    }
+
     /// The metrics of the density of the client.
     #[must_use]
     pub fn metrics(&self) -> Metrics {

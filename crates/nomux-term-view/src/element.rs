@@ -33,6 +33,8 @@ pub struct TerminalStyle {
     pub font: Font,
     /// The font size.
     pub font_size: Pixels,
+    /// The height of a row as a multiple of the font size.
+    pub line_height: f32,
     /// The space between the edge of the element and the cells.
     pub padding: Pixels,
     /// The width of a bar cursor, of an underline cursor and of the outline
@@ -167,9 +169,7 @@ impl<V: EntityInputHandler> TerminalElement<V> {
         let cell_width = text_system
             .advance(font_id, font_size, 'm')
             .map_or(font_size, |advance| advance.width);
-        let ascent = text_system.ascent(font_id, font_size);
-        let descent = text_system.descent(font_id, font_size);
-        let cell_height = (ascent + descent.abs()).ceil();
+        let cell_height = (font_size * self.style.line_height).round();
         let padding = self.style.padding;
         let inner = size(
             bounds.size.width - padding * 2.0,

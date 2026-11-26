@@ -131,3 +131,7 @@ The split keeps the parts that change for different reasons apart, and it keeps 
 ## The theme
 
 The client uses `nomux Dark` and `nomux Light` from `nomux-theme` and follows the appearance of the system (`--appearance dark|light` fixes one). The density is comfortable. The fonts of the `font.ui` and `font.mono` tokens (Inter, JetBrains Mono) are in the binary.
+
+The reference picture is the preview page of the themes (`nomux-theme preview`): the window follows its "Workspace" figure. The tab bar, the line `line.divider` between the sidebar and the pane, the terminal padding `space.3`, and the terminal row height come from it. The row height of the terminal is 1.5 × `font.code.size`, the value of the terminal of the preview page; `nomux-theme` 0.3.1 has no token for it, thus it is one function of the theme crate (`terminal_line_height`).
+
+On macOS the window has the title bar of the system, with the title "nomux". The specification has no title bar region: the window buttons of macOS (about 70 px wide) do not fit in the rail (52 px), and a transparent title bar needs a band above the sidebar header and the tab bar that the specification does not define.

@@ -20,7 +20,8 @@ mod terminal_tabs;
 mod workbench;
 
 use gpui::{
-    App, AppContext, KeyBinding, WindowBounds, WindowHandle, WindowOptions, actions, px, size,
+    App, AppContext, KeyBinding, TitlebarOptions, WindowBounds, WindowHandle, WindowOptions,
+    actions, px, size,
 };
 
 pub use host_connection::{HostConnection, HostRequest, HostUpdate};
@@ -161,6 +162,10 @@ pub fn open_window(
     let bounds = gpui::Bounds::centered(None, size(px(WINDOW_SIZE.0), px(WINDOW_SIZE.1)), cx);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
+        titlebar: Some(TitlebarOptions {
+            title: Some("nomux".into()),
+            ..TitlebarOptions::default()
+        }),
         app_id: Some("sh.nomux.desktop".to_owned()),
         ..WindowOptions::default()
     };

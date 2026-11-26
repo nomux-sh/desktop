@@ -582,7 +582,8 @@ pub(crate) fn terminal_style(theme: &DesktopTheme) -> TerminalStyle {
         },
         font: theme.font(TextStyle::Code),
         font_size: theme.font_size(TextStyle::Code),
-        padding: theme.length(LengthToken::Space2),
+        line_height: theme.terminal_line_height(),
+        padding: theme.length(LengthToken::Space3),
         cursor_width: theme.length(LengthToken::FocusRingWidth),
         line_width: theme.length(LengthToken::LineWidth),
     }

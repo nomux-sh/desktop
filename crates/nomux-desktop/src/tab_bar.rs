@@ -1,7 +1,10 @@
 //! The tab bar of the main area: one Tab for each open session, with the
-//! state glyph and the title. The track is `surface.sunken`; the active Tab
-//! is one tone step up (`surface.raised`) with the accent indicator. No
-//! colour except the state glyph.
+//! state glyph and the title, as the tab bar of the preview page of the
+//! themes: the track is `surface.sunken` with `space.1` above and below and
+//! `space.2` at the sides; a Tab is `control-height` high with
+//! `radius.button`; the active Tab is one tone step up (`surface.raised`) in
+//! `text.primary` with the accent line of `focus.ring-width` at its bottom.
+//! No colour except the state glyph.
 
 use std::rc::Rc;
 
@@ -62,7 +65,6 @@ impl TabBarView {
         let theme = &self.theme;
         let metrics = theme.metrics();
         let font = theme.font(TextStyle::Title);
-        let space_1 = theme.length(LengthToken::Space1);
         let hover = theme.color(ColorToken::FillHover);
         let text = if item.active {
             ColorToken::TextPrimary
@@ -73,16 +75,18 @@ impl TabBarView {
         let on_activate = self.on_activate.clone();
         let close_id = item.session_id.clone();
         let on_close = self.on_close.clone();
+        let group = format!("tab-{}", item.session_id);
         div()
-            .id(ElementId::Name(format!("tab-{}", item.session_id).into()))
+            .id(ElementId::Name(group.clone().into()))
+            .group(group.clone())
             .relative()
             .flex()
             .flex_none()
             .items_center()
-            .gap(space_1)
+            .gap(theme.length(LengthToken::Space2))
             .h(metrics.control_height)
             .px(metrics.padding)
-            .rounded_t(theme.length(LengthToken::RadiusButton))
+            .rounded(theme.length(LengthToken::RadiusButton))
             .font_family(font.family)
             .font_weight(font.weight)
             .text_size(theme.font_size(TextStyle::Title))
@@ -93,8 +97,9 @@ impl TabBarView {
                         .absolute()
                         .left_0()
                         .right_0()
-                        .top_0()
+                        .bottom_0()
                         .h(theme.length(LengthToken::FocusRingWidth))
+                        .rounded_b(theme.length(LengthToken::RadiusButton))
                         .bg(theme.color(ColorToken::Accent)),
                 )
             })
@@ -118,15 +123,18 @@ impl TabBarView {
                     )),
             )
             .child(item.title.clone())
-            .when(item.active, |tab| tab.child(self.close_button(item)))
+            .child(self.close_button(item, group))
     }
 
-    /// The close mark of the active Tab, in `text.muted`.
-    fn close_button(&self, item: &TabItem) -> impl IntoElement {
+    /// The close mark: below the pointer only, in `text.muted`, as the
+    /// actions of a row. It keeps its place at rest, thus the Tab does not
+    /// change its width.
+    fn close_button(&self, item: &TabItem, group: String) -> impl IntoElement {
         let theme = &self.theme;
         let id = item.session_id.clone();
         let on_close = self.on_close.clone();
         let hover = theme.color(ColorToken::FillHover);
+        let muted = theme.color(ColorToken::TextMuted);
         div()
             .id(ElementId::Name(format!("close-{}", item.session_id).into()))
             .flex()
@@ -134,7 +142,8 @@ impl TabBarView {
             .justify_center()
             .size(theme.length(LengthToken::SizeIcon))
             .rounded(theme.length(LengthToken::RadiusButton))
-            .text_color(theme.color(ColorToken::TextMuted))
+            .text_color(gpui::transparent_black())
+            .group_hover(group, move |style| style.text_color(muted))
             .hover(move |style| style.bg(hover))
             .on_click(move |_, window, cx| {
                 cx.stop_propagation();
@@ -152,11 +161,12 @@ impl Render for TabBarView {
         div()
             .id("tab-bar")
             .flex_none()
+            .w_full()
             .flex()
-            .items_end()
+            .items_center()
             .gap(space_1)
-            .h(theme.metrics().control_height + space_1)
-            .px(space_1)
+            .h(theme.metrics().control_height + space_1 * 2.0)
+            .px(theme.length(LengthToken::Space2))
             .overflow_x_scroll()
             .bg(theme.color(ColorToken::SurfaceSunken))
             .children(self.items.iter().map(|item| self.tab(item, turning)))
