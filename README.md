@@ -22,6 +22,7 @@ Version 0.1.0 is the first pre-release. Versions earlier than 1.0.0 are pre-rele
 - A program that asks the terminal (device attributes, cursor position) gets the answer from the session holder of nomux; a colour query gets a fixed dark palette.
 - Closing the window detaches: the sessions continue (`nomux ls`).
 - When no session exists, the client creates none: "New session" starts a shell in the directory of the selected Project or in the home directory.
+- System notifications for a session that needs you and for a result that is done and not seen, when the window is not active or shows another session. One notification for each session; a click opens the session ([Notifications](docs/architecture.md#notifications)).
 - nomux Dark and nomux Light, from the appearance of the system. On macOS the theme reaches the top edge of the window: the window buttons are at the top of the rail, and the line of the sidebar header and the tab bar is the title bar.
 - No work without a change: the working glyph turns and the cursor blinks only while they are visible, and not with reduced motion ([the frame budget](docs/architecture.md#the-frame-budget)).
 
