@@ -10,15 +10,16 @@ use std::sync::Arc;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, AnyView, AppContext, Context, Div, Entity, FontFeatures, Hsla, InteractiveElement,
-    IntoElement, ParentElement, Pixels, Render, StatefulInteractiveElement, StyleRefinement,
-    Styled, Window, div,
+    IntoElement, MouseButton, ParentElement, Pixels, Render, StatefulInteractiveElement,
+    StyleRefinement, Styled, Window, div,
 };
 use nomux_desktop_model::GlyphState;
+use nomux_desktop_model::menu::MenuTarget;
 use nomux_desktop_model::sidebar::{SessionKind, SessionRow, SidebarContent};
 use nomux_desktop_theme::{ColorToken, DesktopTheme, LengthToken, TextStyle};
 
-use crate::ClickHandler;
 use crate::glyph::{Mark, mark};
+use crate::{ClickHandler, ContextHandler};
 
 /// The tree level of a Session row. Level 0 is the worktree, which the
 /// protocol does not have yet.
@@ -40,8 +41,8 @@ struct Header {
 }
 
 /// The view of the sidebar. `on_row` gets the session identifier of a
-/// clicked row, and `on_new_session` the click on "New session" of an
-/// empty Project.
+/// clicked row, `on_new_session` the click on "New session" of an empty
+/// Project, and `on_context` the right click on a row.
 pub struct SidebarView {
     theme: DesktopTheme,
     header: Option<Header>,
@@ -51,6 +52,7 @@ pub struct SidebarView {
     rows: Vec<Entity<SessionRowView>>,
     on_row: ClickHandler<String>,
     on_new_session: ClickHandler<()>,
+    on_context: ContextHandler,
 }
 
 impl SidebarView {
@@ -60,6 +62,7 @@ impl SidebarView {
         theme: DesktopTheme,
         on_row: ClickHandler<String>,
         on_new_session: ClickHandler<()>,
+        on_context: ContextHandler,
     ) -> Self {
         Self {
             theme,
@@ -68,6 +71,7 @@ impl SidebarView {
             rows: Vec::new(),
             on_row,
             on_new_session,
+            on_context,
         }
     }
 
@@ -97,9 +101,12 @@ impl SidebarView {
                 None => {
                     changed = true;
                     let theme = self.theme;
-                    let on_row = self.on_row.clone();
+                    let handlers = RowHandlers {
+                        on_row: self.on_row.clone(),
+                        on_context: self.on_context.clone(),
+                    };
                     let row = row.clone();
-                    cx.new(|_| SessionRowView::new(row, theme, on_row))
+                    cx.new(|_| SessionRowView::new(row, theme, handlers))
                 }
             };
             self.rows.push(view);
@@ -195,16 +202,23 @@ impl Render for SidebarView {
 pub struct SessionRowView {
     row: SessionRow,
     theme: DesktopTheme,
-    on_row: ClickHandler<String>,
+    handlers: RowHandlers,
     paints: u64,
 }
 
+/// What a click on a row, and a right click on it, do.
+#[derive(Clone)]
+struct RowHandlers {
+    on_row: ClickHandler<String>,
+    on_context: ContextHandler,
+}
+
 impl SessionRowView {
-    fn new(row: SessionRow, theme: DesktopTheme, on_row: ClickHandler<String>) -> Self {
+    fn new(row: SessionRow, theme: DesktopTheme, handlers: RowHandlers) -> Self {
         Self {
             row,
             theme,
-            on_row,
+            handlers,
             paints: 0,
         }
     }
@@ -241,7 +255,7 @@ impl Render for SessionRowView {
             theme: &self.theme,
             turning: !cx.reduce_motion(),
         };
-        painter.row(&self.row, &self.on_row)
+        painter.row(&self.row, &self.handlers)
     }
 }
 
@@ -321,14 +335,19 @@ impl SidebarPainter<'_> {
             ))
     }
 
-    fn row(&self, row: &SessionRow, on_row: &ClickHandler<String>) -> AnyElement {
+    fn row(&self, row: &SessionRow, handlers: &RowHandlers) -> AnyElement {
         let theme = self.theme;
         let metrics = theme.metrics();
         let space_1 = theme.length(LengthToken::Space1);
         let space_2 = theme.length(LengthToken::Space2);
         let indent = metrics.padding - space_1 + theme.length(LengthToken::Space4) * SESSION_LEVEL;
         let session_id = row.session_id.clone();
-        let on_row = on_row.clone();
+        let on_row = handlers.on_row.clone();
+        let context_target = MenuTarget::Session {
+            id: row.session_id.clone(),
+            has_tab: row.has_tab,
+        };
+        let on_context = handlers.on_context.clone();
         let hover = theme.color(ColorToken::FillHover);
         let name = match row.kind {
             SessionKind::Agent => self
@@ -362,6 +381,9 @@ impl SidebarPainter<'_> {
                 row_box.hover(move |style| style.bg(hover))
             })
             .on_click(move |_, window, cx| on_row(&session_id, window, cx))
+            .on_mouse_down(MouseButton::Right, move |event, window, cx| {
+                on_context(&(context_target.clone(), event.position), window, cx);
+            })
             .child(self.slot(Mark::State(row.state)))
             .child(div().w(space_1).flex_none())
             .child(name.flex_none().child(row.name.clone()))
@@ -404,9 +426,20 @@ impl SidebarPainter<'_> {
                         ),
                 )
             })
+            .when(row.has_tab, |tail| tail.child(self.tab_mark()))
             .when_some(row.age.clone(), |tail, age| {
                 tail.child(self.tail_text(ColorToken::TextMuted).child(age))
             })
+    }
+
+    /// The small mark of a row that has an open tab.
+    fn tab_mark(&self) -> impl IntoElement {
+        let side = self.theme.length(LengthToken::Space1);
+        div()
+            .flex_none()
+            .size(side)
+            .rounded(side / 2.0)
+            .bg(self.theme.color(ColorToken::TextMuted))
     }
 
     /// A Project without sessions: two lines and the button "New session".

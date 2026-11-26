@@ -12,6 +12,8 @@
 //! - `--capture <file>`: only in a build with the feature `frame-capture`.
 //!   Writes the first frame with the text of a session to a PNG file and
 //!   ends. `capture.rs` describes it.
+//! - `--capture-menu session|tab|project`: with `--capture`, shows a context
+//!   menu in the frame.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -28,6 +30,8 @@ struct Options {
     measure: Option<PathBuf>,
     #[cfg(feature = "frame-capture")]
     capture: Option<PathBuf>,
+    #[cfg(feature = "frame-capture")]
+    capture_menu: Option<nomux_desktop::capture::CaptureMenu>,
 }
 
 fn parse_options() -> Result<Options, String> {
@@ -38,6 +42,8 @@ fn parse_options() -> Result<Options, String> {
         measure: None,
         #[cfg(feature = "frame-capture")]
         capture: None,
+        #[cfg(feature = "frame-capture")]
+        capture_menu: None,
     };
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
@@ -65,6 +71,16 @@ fn parse_options() -> Result<Options, String> {
             "--capture" => {
                 let path = arguments.next().ok_or("--capture needs a file")?;
                 options.capture = Some(PathBuf::from(path));
+            }
+            #[cfg(feature = "frame-capture")]
+            "--capture-menu" => {
+                options.capture_menu = Some(
+                    arguments
+                        .next()
+                        .as_deref()
+                        .and_then(nomux_desktop::capture::CaptureMenu::parse)
+                        .ok_or("--capture-menu needs `session`, `tab` or `project`")?,
+                );
             }
             other => return Err(format!("unknown argument `{other}`")),
         }
@@ -97,6 +113,7 @@ fn main() -> ExitCode {
             eprintln!("nomux-desktop: the shipped fonts cannot be loaded: {error}");
         }
         nomux_desktop::bind_keys(cx);
+        nomux_desktop::install_menus(cx);
         cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {
                 cx.quit();
@@ -133,6 +150,13 @@ fn main() -> ExitCode {
                                     .read_with(cx, |workbench, _| workbench.tab().cloned())
                                     .ok()
                                     .flatten()
+                            },
+                            move |cx| {
+                                if let Some(menu) = options.capture_menu {
+                                    let _ = handle.update(cx, |workbench, _, cx| {
+                                        workbench.open_menu_for_capture(menu, cx);
+                                    });
+                                }
                             },
                             cx,
                         )

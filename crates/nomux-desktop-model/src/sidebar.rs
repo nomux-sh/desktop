@@ -7,12 +7,13 @@
 
 use std::path::Path;
 
-use nomux_client::{AgentRun, NodeKind, Session, SessionState, StatusSource};
+use nomux_client::{AgentRun, Session, SessionState, Sourced, StatusSource};
 
 use crate::age::format_age;
 use crate::glyph_state::GlyphState;
 use crate::host_state::HostState;
 use crate::selection::{ProjectView, Selection};
+use crate::tabs::Tabs;
 
 /// The header and the rows of the sidebar.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,6 +55,8 @@ pub struct SessionRow {
     pub age: Option<String>,
     /// `true` for the selected row.
     pub selected: bool,
+    /// `true` if the session has an open tab.
+    pub has_tab: bool,
 }
 
 impl SessionRow {
@@ -71,35 +74,32 @@ impl SessionRow {
 pub const UNASSIGNED_TITLE: &str = "No project";
 
 /// The sidebar of the selected Project. `None` if nothing is selected.
-/// `now_ms` is the current time and `home` the home directory of the user,
-/// for the ages and the directories.
+/// `now_ms` is the current time, for the ages, and `home` the home directory
+/// of the user, which a row shows as `~`. `tabs` tells which rows have an
+/// open tab.
 #[must_use]
 pub fn sidebar(
     host: &HostState,
     selection: &Selection,
+    tabs: &Tabs,
     now_ms: u64,
     home: Option<&Path>,
 ) -> Option<SidebarContent> {
     let view = selection.project()?;
-    let (title, project_directory) = match view {
-        ProjectView::Project(id) => {
-            let node = host.workspace().tree.get(id)?;
-            let directory = match &node.kind {
-                NodeKind::Project { directory } => Some(directory.as_path()),
-                NodeKind::Group => None,
-            };
-            (node.name.clone(), directory)
-        }
-        ProjectView::Unassigned => (UNASSIGNED_TITLE.to_owned(), None),
+    let title = match view {
+        ProjectView::Project(id) => host.workspace().tree.get(id)?.name.clone(),
+        ProjectView::Unassigned => UNASSIGNED_TITLE.to_owned(),
     };
     let rows: Vec<SessionRow> = ordered_sessions(host, view)
         .into_iter()
         .map(|session| {
-            let directory = DirectoryContext {
-                project: project_directory,
+            let context = RowContext {
+                now_ms,
                 home,
+                selection,
+                tabs,
             };
-            session_row(session, host.run(&session.id), directory, now_ms, selection)
+            session_row(session, host.run(&session.id), &context)
         })
         .collect();
     let needs_you = rows
@@ -128,29 +128,23 @@ pub fn ordered_sessions<'a>(host: &'a HostState, view: &'a ProjectView) -> Vec<&
     sessions
 }
 
-#[derive(Clone, Copy)]
-struct DirectoryContext<'a> {
-    project: Option<&'a Path>,
+struct RowContext<'a> {
+    now_ms: u64,
     home: Option<&'a Path>,
+    selection: &'a Selection,
+    tabs: &'a Tabs,
 }
 
-fn session_row(
-    session: &Session,
-    run: Option<&AgentRun>,
-    directory: DirectoryContext<'_>,
-    now_ms: u64,
-    selection: &Selection,
-) -> SessionRow {
+fn session_row(session: &Session, run: Option<&AgentRun>, context: &RowContext<'_>) -> SessionRow {
     let kind = if run.is_some_and(is_agent) {
         SessionKind::Agent
     } else {
         SessionKind::Shell
     };
-    let title = run.and_then(|run| run.status.title.as_ref().map(|title| title.value.clone()));
-    let name = match kind {
-        SessionKind::Agent => title.unwrap_or_else(|| session_name(session)),
-        SessionKind::Shell => session_name(session),
+    let reported = |field: fn(&AgentRun) -> Option<&Sourced<String>>| {
+        run.and_then(field).map(|sourced| sourced.value.clone())
     };
+    let name = display_name(session, run, context.home);
     let secondary = if session.state == SessionState::Dormant {
         Some("dormant · restores on open".to_owned())
     } else {
@@ -161,7 +155,9 @@ fn session_row(
                 .map(|message| message.value.clone())
         })
         .or_else(|| match kind {
-            SessionKind::Shell => short_directory(session, directory),
+            SessionKind::Shell => Some(
+                reported(|run| run.status.tool.as_ref()).unwrap_or_else(|| program_name(session)),
+            ),
             SessionKind::Agent => None,
         })
     };
@@ -182,9 +178,28 @@ fn session_row(
         children,
         age: session
             .started_at
-            .map(|started_at| format_age(started_at.saturating_mul(1000), now_ms)),
-        selected: selection.session() == Some(session.id.as_str()),
+            .map(|started_at| format_age(started_at.saturating_mul(1000), context.now_ms)),
+        selected: context.selection.session() == Some(session.id.as_str()),
+        has_tab: context.tabs.sessions().contains(&session.id),
     }
+}
+
+/// The name that a row shows: the title of an agent, else the name of the
+/// session, else the name of its working directory, else its program.
+fn display_name(session: &Session, run: Option<&AgentRun>, home: Option<&Path>) -> String {
+    let title = run
+        .filter(|run| is_agent(run))
+        .and_then(|run| run.status.title.as_ref().or(run.status.tool.as_ref()))
+        .map(|sourced| sourced.value.clone());
+    title.unwrap_or_else(|| session_name(session, home))
+}
+
+/// The name that the row of the session `id` shows, for a question about
+/// the session.
+#[must_use]
+pub fn session_label(host: &HostState, id: &str, home: Option<&Path>) -> Option<String> {
+    let session = host.session(id)?;
+    Some(display_name(session, host.run(id), home))
 }
 
 /// An agent reports its status. A guess from the shell or a session
@@ -197,12 +212,30 @@ fn is_agent(run: &AgentRun) -> bool {
         )
 }
 
-/// The name of the session, else the file name of its program.
-pub(crate) fn session_name(session: &Session) -> String {
+/// The name of the session, else the name of its working directory (`~` for
+/// the home directory), else the file name of its program.
+pub fn session_name(session: &Session, home: Option<&Path>) -> String {
     session
         .name
         .clone()
+        .or_else(|| directory_name(session, home))
         .unwrap_or_else(|| program_name(session))
+}
+
+/// The last component of the working directory: `~` for the home directory
+/// and `/` for the root.
+fn directory_name(session: &Session, home: Option<&Path>) -> Option<String> {
+    let directory = session
+        .resolved_working_directory
+        .as_deref()
+        .or(session.working_directory.as_deref())?;
+    if home == Some(directory) {
+        return Some("~".to_owned());
+    }
+    Some(directory.file_name().map_or_else(
+        || directory.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    ))
 }
 
 /// The file name of the program of the session.
@@ -215,28 +248,4 @@ fn program_name(session: &Session) -> String {
             || "shell".to_owned(),
             |name| name.to_string_lossy().into_owned(),
         )
-}
-
-/// The working directory below the Project, or below the home directory as
-/// `~/…`. `None` when it is the directory of the Project.
-fn short_directory(session: &Session, directory: DirectoryContext<'_>) -> Option<String> {
-    let working = session
-        .resolved_working_directory
-        .as_deref()
-        .or(session.working_directory.as_deref())?;
-    if let Some(project) = directory.project
-        && let Ok(below) = working.strip_prefix(project)
-    {
-        return (!below.as_os_str().is_empty()).then(|| below.display().to_string());
-    }
-    if let Some(home) = directory.home
-        && let Ok(below) = working.strip_prefix(home)
-    {
-        return Some(if below.as_os_str().is_empty() {
-            "~".to_owned()
-        } else {
-            format!("~/{}", below.display())
-        });
-    }
-    Some(working.display().to_string())
 }

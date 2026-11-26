@@ -1,9 +1,10 @@
 //! The copy of the client of the state of a host.
 
 use std::collections::HashMap;
+use std::path::Path;
 
 use nomux_client::{
-    AgentRun, AgentTree, Applied, EventBody, HostEvent, Session, SessionState, Workspace,
+    AgentRun, AgentTree, Applied, EventBody, HostEvent, NodeKind, Session, SessionState, Workspace,
 };
 
 use crate::selection::ProjectView;
@@ -135,6 +136,26 @@ impl HostState {
         })
     }
 
+    /// The node identifier of the Project that has `directory`.
+    #[must_use]
+    pub fn project_with_directory(&self, directory: &Path) -> Option<&str> {
+        self.workspace
+            .tree
+            .nodes()
+            .into_iter()
+            .find(|node| node.directory() == Some(directory))
+            .map(|node| node.id.as_str())
+    }
+
+    /// The directory of the Project `id`.
+    #[must_use]
+    pub fn project_directory(&self, id: &str) -> Option<&Path> {
+        match &self.workspace.tree.get(id)?.kind {
+            NodeKind::Project { directory } => Some(directory.as_path()),
+            NodeKind::Group => None,
+        }
+    }
+
     /// The identifier of the Project of a session.
     #[must_use]
     pub fn project_of(&self, session: &Session) -> Option<&str> {
@@ -152,4 +173,13 @@ impl HostState {
 
 fn is_shown(session: &Session) -> bool {
     !matches!(session.state, SessionState::Ended | SessionState::Damaged)
+}
+
+/// The name of a new Project for `directory`: the name of the directory.
+#[must_use]
+pub fn project_name(directory: &Path) -> String {
+    directory.file_name().map_or_else(
+        || directory.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    )
 }

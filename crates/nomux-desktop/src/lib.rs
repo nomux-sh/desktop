@@ -8,6 +8,8 @@
 //! - [`TerminalTab`]: the terminal tab.
 //! - [`open_window`]: opens the window, as the binary does.
 
+mod about;
+mod app_menu;
 mod attach;
 #[cfg(feature = "frame-capture")]
 pub mod capture;
@@ -15,6 +17,7 @@ pub mod fonts;
 mod host_connection;
 pub mod measure;
 pub mod reduced_motion;
+mod rename_dialog;
 mod tab_bar;
 mod tab_state;
 mod terminal_tab;
@@ -27,9 +30,10 @@ use gpui::{
     actions, px, size,
 };
 
+pub use app_menu::install_menus;
 pub use host_connection::{HostConnection, HostRequest, HostUpdate};
 use nomux_desktop_theme::DesktopTheme;
-pub use terminal_tab::{Copy, Paste, TerminalTab};
+pub use terminal_tab::{Copy, Paste, SelectAll, TerminalTab};
 pub use workbench::{Appearance, Workbench};
 
 use crate::measure::Measurement;
@@ -40,6 +44,27 @@ pub const WINDOW_SIZE: (f32, f32) = (1280.0, 800.0);
 actions!(
     workbench,
     [
+        /// Ends the application. The sessions continue in the daemon.
+        Quit,
+        /// Shows the version of the application.
+        About,
+        /// Shows the configuration file of nomux in the file manager.
+        OpenSettings,
+        /// Hides the application.
+        Hide,
+        /// Opens the documentation in the browser.
+        OpenDocumentation,
+        /// Asks for a folder and adds it as a Project.
+        AddProject,
+        /// Lists the Projects and starts a session in the one that the user
+        /// chooses.
+        NewSessionInProject,
+        /// Shows or hides the sidebar.
+        ToggleSidebar,
+        /// Minimizes the window.
+        Minimize,
+        /// Zooms the window.
+        Zoom,
         /// Starts a session in the directory of the shown Project and opens
         /// it in a new tab.
         NewSession,
@@ -78,6 +103,9 @@ actions!(
 struct TabKeys {
     new: &'static str,
     close: &'static str,
+    add_project: &'static str,
+    toggle_sidebar: &'static str,
+    quit: &'static str,
     next: &'static str,
     previous: &'static str,
     left: &'static str,
@@ -90,6 +118,9 @@ struct TabKeys {
 const MACOS_TAB_KEYS: TabKeys = TabKeys {
     new: "cmd-t",
     close: "cmd-w",
+    add_project: "cmd-o",
+    toggle_sidebar: "cmd-b",
+    quit: "cmd-q",
     next: "cmd-shift-]",
     previous: "cmd-shift-[",
     left: "cmd-shift-left",
@@ -103,6 +134,9 @@ const MACOS_TAB_KEYS: TabKeys = TabKeys {
 const LINUX_TAB_KEYS: TabKeys = TabKeys {
     new: "ctrl-shift-t",
     close: "ctrl-shift-w",
+    add_project: "ctrl-shift-o",
+    toggle_sidebar: "ctrl-shift-b",
+    quit: "ctrl-shift-q",
     next: "ctrl-pagedown",
     previous: "ctrl-pageup",
     left: "ctrl-shift-pageup",
@@ -115,26 +149,37 @@ const LINUX_TAB_KEYS: TabKeys = TabKeys {
 /// Registers the key bindings of the client.
 pub fn bind_keys(cx: &mut App) {
     let macos = cfg!(target_os = "macos");
-    let (copy, paste) = if macos {
-        ("cmd-c", "cmd-v")
+    let (copy, paste, select_all) = if macos {
+        ("cmd-c", "cmd-v", "cmd-a")
     } else {
-        ("ctrl-shift-c", "ctrl-shift-v")
+        ("ctrl-shift-c", "ctrl-shift-v", "ctrl-shift-a")
     };
     let terminal = Some(terminal_tab::KEY_CONTEXT);
     cx.bind_keys([
         KeyBinding::new(copy, Copy, terminal),
         KeyBinding::new(paste, Paste, terminal),
+        KeyBinding::new(select_all, SelectAll, terminal),
     ]);
     let keys = if macos {
         MACOS_TAB_KEYS
     } else {
         LINUX_TAB_KEYS
     };
+    cx.bind_keys([KeyBinding::new(keys.quit, Quit, None)]);
+    if macos {
+        cx.bind_keys([
+            KeyBinding::new("cmd-,", OpenSettings, None),
+            KeyBinding::new("cmd-h", Hide, None),
+            KeyBinding::new("cmd-m", Minimize, None),
+        ]);
+    }
     let [one, two, three, four, five, six, seven, eight, last] = keys.numbers;
     let context = Some(workbench::KEY_CONTEXT);
     cx.bind_keys([
         KeyBinding::new(keys.new, NewSession, context),
         KeyBinding::new(keys.close, CloseTab, context),
+        KeyBinding::new(keys.add_project, AddProject, context),
+        KeyBinding::new(keys.toggle_sidebar, ToggleSidebar, context),
         KeyBinding::new(keys.next, NextTab, context),
         KeyBinding::new(keys.previous, PreviousTab, context),
         KeyBinding::new(keys.left, MoveTabLeft, context),

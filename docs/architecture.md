@@ -61,6 +61,7 @@ key down ─▶ TerminalTab::on_key_down ─▶ input::key_bytes(keystroke, mode
 
 The main area has one terminal tab for each open session. `Tabs` in the model holds the sequence and the active tab; `TerminalTabs` in `nomux-desktop` holds one `TerminalTab` for each of them, the tab bar and the state file. The `Workbench` routes the clicks and the key actions to them.
 
+- A row that has an open tab shows a small mark.
 - A click on a Session row shows the session in the active tab. With the platform modifier (Cmd on macOS, Ctrl on Linux) the click opens the session in a new tab after the active one, as in a web browser. A session is in one tab at most: a click on a session that has a tab activates that tab.
 - Closing a tab drops its `TerminalTab`, which detaches. The session continues. The tab at the right becomes active, else the one at the left.
 - Only the active tab is visible. A hidden tab keeps its attach: the connection thread feeds its terminal, and the tab asks for no frame. Its `changed` flag stays set, thus its attach wakes the UI one time until the tab is shown again, and the first frame after the switch takes one snapshot. A hidden tab that was never shown attaches with the grid size of the active tab.
@@ -75,6 +76,7 @@ The main area has one terminal tab for each open session. `Tabs` in the model ho
 | Tab 1 to 8, the last tab | Cmd-1 to Cmd-8, Cmd-9 | Alt-1 to Alt-8, Alt-9 |
 | Open a session in a new tab | Cmd-click on its row | Ctrl-click on its row |
 | Close a tab | the close mark, which takes the place of the state glyph below the pointer, or a middle click | the same |
+| Close a tab, or each other tab | right click on the tab | the same |
 
 On Linux, Alt-1 to Alt-9 go to the tabs, not to the program in the terminal, as in GNOME Terminal.
 
@@ -88,6 +90,19 @@ The client writes the open tabs after each change, on a background thread, and o
 A daemon that runs from an earlier install can be older than the client needs. The connection thread asks the daemon for its version before it loads anything (`HostInfo`). `nomux-desktop-model::daemon_support` compares it with `MINIMUM_DAEMON_VERSION` (0.5.0, the first release that has the workspace request). An older daemon gives `HostUpdate::DaemonOutdated`: the client loads nothing, and the main area shows a card with the version, the version that it needs, and the button "Restart the daemon". A version that the client cannot read is supported.
 
 The button sends `HostRequest::ReplaceDaemon`. The connection thread stops the daemon (`Client::stop_daemon`), starts the `nomuxd` of this app (`Host::client` starts the daemon that is next to the client binary), and loads the host. No session ends: each session runs in its own holder, and the new daemon finds the holders again. The smoke test `a_replaced_daemon_keeps_the_sessions_and_their_processes` checks that the session list and the process identifiers are the same after the replacement.
+
+## Menus and dialogs
+
+- **Menu bar.** `app_menu.rs` installs the menus of macOS with `App::set_menus`: nomux (About, Settings..., Hide, Quit), File, Edit, View, Window and Help. Each item is an action. The menu shows the keys of the bindings that exist when it is installed, thus `bind_keys` runs first. GPUI disables an item when no element in the focus path handles its action: Copy and Select All are active when a terminal has the focus. Linux has the same actions and keys (Ctrl-Shift-Q quits), and no menu bar.
+- **Quit.** Cmd-Q (Ctrl-Shift-Q on Linux) and "Quit nomux" end the application. The close button of the last window ends it too. No session ends: each one runs in the daemon.
+- **Settings...** shows `config.toml` of nomux in the file manager, at the place that `nomux_core::configuration::default_configuration_path` gives (`~/Library/Application Support/nomux/config.toml` on macOS). If the file does not exist, it shows the closest folder that exists. The client writes no file.
+- **Add Project.** Cmd-O (Ctrl-Shift-O), the `+` at the bottom of the rail and the button of the empty state ask for a folder with the dialog of the system (`App::prompt_for_paths`). A folder that is a Project is shown. Else `HostRequest::AddProject` sends `Workspace.AddProject` to the daemon (the Project gets the name of the folder, at the end of the top level). The connection thread loads the tree again and tells the window the node identifier, and the window selects the Project.
+- **New Session in Project...** lists the Projects in a menu below the tab bar. Without a Project it asks for a folder.
+- **Context menus.** A right click on a Session row, a tab or a Project tile sets `Workbench::context_menu`. `nomux_desktop_model::menu` decides which choices exist and which one is destructive; `nomux_sidebar::context_menu` paints them in a `deferred` and `anchored` element at the pointer. A click outside closes the menu. The choice runs in `workbench/commands.rs`.
+- **Kill session...** asks `Kill session "name"?` in a dialog of the system. The default button is "Cancel". Only "Kill session" sends `HostRequest::KillSession`, after the tab of the session closed.
+- **Rename...** opens a line of text over the window (`rename_dialog.rs`; the rules of the line are `LineEditor` in the model). Enter gives the name and an empty name clears it. The daemon checks the name.
+- **Failures.** Before the first list of the sessions a failure is the text of the empty state. After it, a dialog of the system shows it, because the main area shows a terminal.
+- **The name of a row.** The name of the session, else the name of its directory (`~` for the home directory), else its program. A shell row shows, after the name, the tool that the daemon reports for the session, else the program of its command. The protocol has no foreground program of the terminal: `AgentStatus.tool` is the only program name that a client gets.
 
 ## The frame budget
 
@@ -140,7 +155,7 @@ The budget of the desktop client is an idle footprint of at most 110 MB for a wi
 
 | Crate | Depends on | Responsibility |
 |---|---|---|
-| `nomux-desktop` | all crates below, `gpui`, `gpui_platform`, `nomux-client`, `nomux-term`, `tokio` | The binary and the window: `Workbench` (the root view), `HostConnection` and the attach, `TerminalTab`, the fonts, the measurement mode. |
+| `nomux-desktop` | all crates below, `gpui`, `gpui_platform`, `nomux-client`, `nomux-core`, `nomux-term`, `tokio` | The binary and the window: `Workbench` (the root view), `HostConnection` and the attach, `TerminalTab`, the fonts, the measurement mode. |
 | `nomux-desktop-model` | `nomux-client` (types only) | The state without GPUI: `HostState` (applies events, says what to load again), `Selection`, the content of the rail and of the sidebar, the label rule of a project tile, the state glyph and its priority. |
 | `nomux-term-view` | `gpui`, `nomux-term` | The terminal element: `TerminalSnapshot`, `PaintPlan`, `GlyphCache`, `TerminalElement`, the input encoding, the selection. No I/O. |
 | `nomux-sidebar` | `gpui`, `nomux-desktop-model`, `nomux-desktop-theme` | The views of the rail and of the sidebar, and the state glyphs. No state of their own. |

@@ -91,3 +91,17 @@ fn the_saved_state_gives_the_same_tabs_and_ignores_damaged_lines() {
     assert_eq!(damaged.sessions(), ["a1", "b2"]);
     assert_eq!(damaged.active(), Some("a1"));
 }
+
+#[test]
+fn closing_the_other_tabs_keeps_one_tab_and_says_which_ones_closed() {
+    let mut tabs = tabs(&["a", "b", "c"], "a");
+    assert_eq!(
+        tabs.close_others("b"),
+        Some(vec!["a".to_owned(), "c".to_owned()])
+    );
+    assert_eq!(tabs.sessions(), ["b"]);
+    assert_eq!(tabs.active(), Some("b"));
+    // A session without a tab closes nothing.
+    assert_eq!(tabs.close_others("x"), None);
+    assert_eq!(tabs.sessions(), ["b"]);
+}

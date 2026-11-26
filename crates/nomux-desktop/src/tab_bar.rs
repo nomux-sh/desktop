@@ -17,8 +17,9 @@ use gpui::{
     StatefulInteractiveElement, Styled, Window, div,
 };
 use nomux_desktop_model::TabItem;
+use nomux_desktop_model::menu::MenuTarget;
 use nomux_desktop_theme::{ColorToken, DesktopTheme, LengthToken, TextStyle};
-use nomux_sidebar::{Mark, mark};
+use nomux_sidebar::{ContextHandler, Mark, mark};
 
 use crate::title_bar;
 
@@ -37,15 +38,21 @@ pub(crate) struct TabBarView {
     items: Vec<TabItem>,
     on_activate: TabHandler,
     on_close: TabHandler,
+    on_context: ContextHandler,
 }
 
 impl TabBarView {
-    pub(crate) fn new(theme: DesktopTheme, on_activate: TabHandler, on_close: TabHandler) -> Self {
+    pub(crate) fn new(
+        theme: DesktopTheme,
+        handlers: (TabHandler, TabHandler, ContextHandler),
+    ) -> Self {
+        let (on_activate, on_close, on_context) = handlers;
         Self {
             theme,
             items: Vec::new(),
             on_activate,
             on_close,
+            on_context,
         }
     }
 
@@ -85,6 +92,11 @@ impl TabBarView {
         let on_activate = self.on_activate.clone();
         let close_id = item.session_id.clone();
         let on_close = self.on_close.clone();
+        let context_target = MenuTarget::Tab {
+            id: item.session_id.clone(),
+            tab_count: self.items.len(),
+        };
+        let on_context = self.on_context.clone();
         let group = format!("tab-{}", item.session_id);
         div()
             .id(ElementId::Name(group.clone().into()))
@@ -117,6 +129,9 @@ impl TabBarView {
             .on_click(move |_, window, cx| on_activate(&id, window, cx))
             .on_mouse_down(MouseButton::Middle, move |_, window, cx| {
                 on_close(&close_id, window, cx);
+            })
+            .on_mouse_down(MouseButton::Right, move |event, window, cx| {
+                on_context(&(context_target.clone(), event.position), window, cx);
             })
             .child(
                 div()
