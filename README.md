@@ -26,7 +26,7 @@ In development. Versions earlier than 1.0.0 are pre-releases: interfaces can cha
 - Splits, the settings, the agent view, diffs, extensions, remote hosts, packages (`.dmg`, `.deb`), Windows.
 - Answers to the queries of a program (device attributes, cursor position, colours): `nomux-term` drops them (nomux-sh/nomux#89).
 - The kitty keyboard protocol: keys use the xterm encoding. The application keypad mode: GPUI does not tell a keypad key from the same key of the main block, thus keypad keys send the bytes of the main keys.
-- The hover actions of a row (stop, menu), the tooltips, the expanded rail, the motion of a Group that opens, child rows of an agent, the compact density.
+- The shell chips and the team roster of the tab bar, the hover actions of a row (stop, menu), the tooltips, the expanded rail, the motion of a Group that opens, child rows of an agent, the compact density.
 
 ## Build and run
 
