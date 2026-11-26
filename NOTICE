@@ -1,0 +1,18 @@
+nomux desktop
+Copyright The nomux Authors
+
+This product is licensed under the MIT license or the Apache License,
+Version 2.0, at your option.
+
+This product includes fonts of these projects. Their licenses are next to the
+font files in assets/fonts/.
+
+Inter (https://github.com/rsms/inter), version 4.1
+Copyright (c) 2016 The Inter Project Authors
+SIL Open Font License, Version 1.1
+Used in assets/fonts/Inter-Regular.ttf and assets/fonts/Inter-Medium.ttf
+
+JetBrains Mono (https://github.com/JetBrains/JetBrainsMono), version 2.304
+Copyright 2020 The JetBrains Mono Project Authors
+SIL Open Font License, Version 1.1
+Used in assets/fonts/JetBrainsMono-*.ttf
