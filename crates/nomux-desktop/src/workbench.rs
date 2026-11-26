@@ -22,7 +22,17 @@ use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::host_connection::{HostConnection, HostRequest, HostUpdate};
 use crate::measure::Measurement;
+use crate::tab_bar::TabHandler;
 use crate::terminal_tab::TerminalTab;
+use crate::terminal_tabs::TerminalTabs;
+use crate::{
+    ActivateLastTab, ActivateTab1, ActivateTab2, ActivateTab3, ActivateTab4, ActivateTab5,
+    ActivateTab6, ActivateTab7, ActivateTab8, CloseTab, MoveTabLeft, MoveTabRight, NewSession,
+    NextTab, PreviousTab,
+};
+
+/// The key context of the window, for the key bindings of the tabs.
+pub(crate) const KEY_CONTEXT: &str = "Workbench";
 
 /// The appearance of the window: from the system, or fixed by the option
 /// `--appearance`.
@@ -45,7 +55,6 @@ const AGE_INTERVAL: Duration = Duration::from_secs(60);
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MainArea {
     tab: Option<String>,
-    title: String,
     message: String,
 }
 
@@ -58,12 +67,14 @@ pub struct Workbench {
     connection: HostConnection,
     rail: Entity<RailView>,
     sidebar: Entity<SidebarView>,
-    tab: Option<Entity<TerminalTab>>,
+    tabs: TerminalTabs,
+    /// `true` after the first list of the sessions.
+    loaded: bool,
     main_area: Option<MainArea>,
     /// The clock of the working glyphs: runs only while one is visible.
     clock: Option<Task<()>>,
-    /// The session that the user created; it is selected when the list of
-    /// the sessions has it.
+    /// The session that the user created; it opens in a new tab when the
+    /// list of the sessions has it.
     created_session: Option<String>,
     failure: Option<String>,
     home: Option<PathBuf>,
@@ -119,6 +130,21 @@ impl Workbench {
             });
         let on_new: ClickHandler<()> =
             Self::handler(cx, |workbench, (): &(), _, _| workbench.new_session());
+        let on_activate: TabHandler = Self::tab_handler(cx, |workbench, id, window, cx| {
+            workbench.tabs.tabs_mut().show(id);
+            workbench.follow_active_tab(window, cx);
+        });
+        let on_close: TabHandler = Self::tab_handler(cx, |workbench, id, window, cx| {
+            workbench.tabs.tabs_mut().close(id);
+            workbench.follow_active_tab(window, cx);
+        });
+        let tabs = TerminalTabs::new(
+            connection.clone(),
+            theme,
+            measurement.clone(),
+            (on_activate, on_close),
+            cx,
+        );
         Self {
             theme,
             appearance,
@@ -127,7 +153,8 @@ impl Workbench {
             connection,
             rail: cx.new(|_| RailView::new(theme, on_tile)),
             sidebar: cx.new(|_| SidebarView::new(theme, on_row, on_new)),
-            tab: None,
+            tabs,
+            loaded: false,
             main_area: None,
             clock: None,
             created_session: None,
@@ -148,8 +175,40 @@ impl Workbench {
     /// The system setting of reduced motion changed.
     pub fn motion_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.sync_clock(window, cx);
-        if let Some(tab) = &self.tab {
-            tab.update(cx, |tab, cx| tab.motion_changed(window, cx));
+        self.tabs.motion_changed(window, cx);
+    }
+
+    /// The number of open tabs.
+    #[must_use]
+    pub fn tab_count(&self) -> usize {
+        self.tabs.tabs().sessions().len()
+    }
+
+    /// Activates the tab at `index` (0 is the first).
+    pub fn activate_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.tabs.tabs_mut().activate(index);
+        self.follow_active_tab(window, cx);
+    }
+
+    /// The sidebar shows the Project of the active tab and selects its row.
+    fn follow_active_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(id) = self.tabs.tabs().active().map(str::to_owned) {
+            self.select_session_of_host(&id);
+        }
+        self.refresh(window, cx);
+    }
+
+    /// Selects the row of the active tab if the sidebar shows its Project.
+    fn sync_selection(&mut self) {
+        let active = self.tabs.tabs().active().filter(|id| {
+            self.host.session(id).is_some_and(|session| {
+                self.selection.project().map(ProjectView::project_id)
+                    == Some(self.host.project_of(session))
+            })
+        });
+        match active {
+            Some(id) => self.selection.select_session(id),
+            None => self.selection.clear_session(),
         }
     }
 
@@ -157,14 +216,15 @@ impl Workbench {
     /// session, and starts or stops the clock. Each view renders again only
     /// if its content changed.
     fn refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.tabs.sync(&self.host, self.theme, window, cx);
+        self.sync_selection();
         let tiles = rail::rail(&self.host, &self.selection);
         let content = sidebar::sidebar(&self.host, &self.selection, now_ms(), self.home.as_deref());
         self.rail.update(cx, |rail, cx| rail.set_tiles(tiles, cx));
         self.sidebar
             .update(cx, |sidebar, cx| sidebar.set_content(content.as_ref(), cx));
-        self.sync_tab(window, cx);
         self.sync_clock(window, cx);
-        let main_area = Some(self.main_area_content(cx));
+        let main_area = Some(self.main_area_content());
         if main_area != self.main_area {
             self.main_area = main_area;
             cx.notify();
@@ -178,7 +238,9 @@ impl Workbench {
             window_visible: window.is_visible(),
             reduce_motion: cx.reduce_motion(),
         };
-        let animates = self.rail.read(cx).animates() || self.sidebar.read(cx).animates(cx);
+        let animates = self.rail.read(cx).animates()
+            || self.sidebar.read(cx).animates(cx)
+            || self.tabs.bar().read(cx).animates();
         if !(animates && motion.allows_motion()) {
             self.clock = None;
             return;
@@ -193,6 +255,7 @@ impl Workbench {
                 let ticked = workbench.update(cx, |workbench, cx| {
                     workbench.rail.update(cx, |rail, cx| rail.tick(cx));
                     workbench.sidebar.update(cx, |sidebar, cx| sidebar.tick(cx));
+                    workbench.tabs.bar().update(cx, |bar, cx| bar.tick(cx));
                 });
                 if ticked.is_err() {
                     return;
@@ -201,10 +264,10 @@ impl Workbench {
         }));
     }
 
-    /// The terminal tab, if a session is selected.
+    /// The terminal of the active tab.
     #[must_use]
     pub fn tab(&self) -> Option<&Entity<TerminalTab>> {
-        self.tab.as_ref()
+        self.tabs.active_terminal()
     }
 
     fn follow_appearance(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -213,9 +276,7 @@ impl Workbench {
         self.rail.update(cx, |rail, cx| rail.set_theme(theme, cx));
         self.sidebar
             .update(cx, |sidebar, cx| sidebar.set_theme(theme, cx));
-        if let Some(tab) = &self.tab {
-            tab.update(cx, |tab, cx| tab.set_theme(&theme, cx));
-        }
+        self.tabs.set_theme(theme, cx);
         cx.notify();
     }
 
@@ -224,8 +285,17 @@ impl Workbench {
             HostUpdate::Workspace(workspace) => self.host.set_workspace(workspace),
             HostUpdate::Sessions(sessions) => {
                 self.host.set_sessions(sessions);
+                if !self.loaded {
+                    self.loaded = true;
+                    self.open_first_tabs();
+                }
                 if let Some(id) = self.created_session.take() {
-                    self.select_session_of_host(&id);
+                    if self.host.session(&id).is_some() {
+                        self.tabs.tabs_mut().open(&id);
+                        self.select_session_of_host(&id);
+                    } else {
+                        self.created_session = Some(id);
+                    }
                 }
             }
             HostUpdate::AgentTree(tree) => self.host.set_agent_tree(tree),
@@ -242,10 +312,24 @@ impl Workbench {
         self.refresh(window, cx);
     }
 
+    /// At the first list of the sessions: the tabs of the last run, else
+    /// the first session of the first Project.
+    fn open_first_tabs(&mut self) {
+        if self.tabs.restore(&self.host) {
+            if let Some(id) = self.tabs.tabs().active().map(str::to_owned) {
+                self.select_session_of_host(&id);
+            }
+            return;
+        }
+        self.selection.reconcile(&self.host);
+        if let Some(id) = self.selection.session().map(str::to_owned) {
+            self.tabs.tabs_mut().show(&id);
+        }
+    }
+
     /// Shows the Project of a session and selects the session.
     fn select_session_of_host(&mut self, id: &str) {
         let Some(session) = self.host.session(id) else {
-            self.created_session = Some(id.to_owned());
             return;
         };
         let view = self
@@ -258,49 +342,47 @@ impl Workbench {
         self.selection.select_session(id);
     }
 
-    /// Makes the terminal tab show the selected session. Dropping the old
-    /// tab detaches it; its session continues.
-    fn sync_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let selected = self.selection.session();
-        let current = self
-            .tab
-            .as_ref()
-            .map(|tab| tab.read(cx).session_id().to_owned());
-        if selected == current.as_deref() {
-            return;
-        }
-        let Some(id) = selected.map(str::to_owned) else {
-            self.tab = None;
-            return;
-        };
-        let connection = self.connection.clone();
-        let theme = self.theme;
-        let measurement = self.measurement.clone();
-        let tab = cx.new(|cx| TerminalTab::new(id, connection, &theme, measurement, window, cx));
-        window.focus(&tab.focus_handle(cx), cx);
-        self.tab = Some(tab);
-    }
-
     fn click_tile(&mut self, target: &TileTarget, window: &mut Window, cx: &mut Context<Self>) {
         match target {
-            TileTarget::Project(view) => self.selection.select_project(view.clone(), &self.host),
+            TileTarget::Project(view) => {
+                self.selection.select_project(view.clone(), &self.host);
+                self.activate_tab_of_project(view);
+            }
             TileTarget::Group(id) => self.selection.toggle_group(id),
         }
         self.refresh(window, cx);
     }
 
+    /// Activates the first tab of a session of the Project `view`, if one is
+    /// open. The other tabs stay as they are.
+    fn activate_tab_of_project(&mut self, view: &ProjectView) {
+        let host = &self.host;
+        let tab = self.tabs.tabs().sessions().iter().position(|id| {
+            host.session(id)
+                .is_some_and(|session| host.project_of(session) == view.project_id())
+        });
+        if let Some(index) = tab {
+            self.tabs.tabs_mut().activate(index);
+        }
+    }
+
+    /// A click on a row shows the session in the active tab; with the
+    /// platform modifier (Cmd on macOS, Ctrl on Linux) it opens a new tab.
     fn click_session(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
-        self.selection.select_session(id);
-        self.refresh(window, cx);
-        if let Some(tab) = &self.tab {
-            let focus = tab.focus_handle(cx);
-            window.focus(&focus, cx);
+        if window.modifiers().secondary(cx) {
+            self.tabs.tabs_mut().open(id);
+        } else {
+            self.tabs.tabs_mut().show(id);
+        }
+        self.follow_active_tab(window, cx);
+        if let Some(terminal) = self.tabs.active_terminal() {
+            window.focus(&terminal.focus_handle(cx), cx);
         }
     }
 
     /// Starts a session with the shell of the user in the directory of the
-    /// shown Project, or in the home directory.
-    fn new_session(&mut self) {
+    /// shown Project, or in the home directory. It opens in a new tab.
+    pub fn new_session(&mut self) {
         let directory = self.selection.project().and_then(|view| {
             let node = self.host.workspace().tree.get(view.project_id()?)?;
             match &node.kind {
@@ -310,6 +392,18 @@ impl Workbench {
         });
         self.connection
             .send(HostRequest::CreateSession { directory });
+    }
+
+    fn tab_handler(
+        cx: &mut Context<Self>,
+        action: impl Fn(&mut Self, &str, &mut Window, &mut Context<Self>) + 'static,
+    ) -> TabHandler {
+        let workbench = cx.entity().downgrade();
+        let action = Rc::new(action);
+        Rc::new(move |id: &str, window, cx| {
+            let action = action.clone();
+            let _ = workbench.update(cx, |workbench, cx| action(workbench, id, window, cx));
+        })
     }
 
     fn handler<T: 'static>(
@@ -325,22 +419,8 @@ impl Workbench {
     }
 
     /// What the main area shows now.
-    fn main_area_content(&self, cx: &Context<Self>) -> MainArea {
-        let tab = self
-            .tab
-            .as_ref()
-            .map(|tab| tab.read(cx).session_id().to_owned());
-        let title = tab.as_deref().map_or_else(String::new, |id| {
-            self.host
-                .session(id)
-                .and_then(|session| session.command.first().cloned())
-                .and_then(|program| {
-                    std::path::Path::new(&program)
-                        .file_name()
-                        .map(|name| name.to_string_lossy().into_owned())
-                })
-                .unwrap_or_else(|| id.to_owned())
-        });
+    fn main_area_content(&self) -> MainArea {
+        let tab = self.tabs.tabs().active().map(str::to_owned);
         let place = self
             .selection
             .project()
@@ -353,11 +433,7 @@ impl Workbench {
             .failure
             .clone()
             .unwrap_or_else(|| format!("A new session starts a shell in {place}."));
-        MainArea {
-            tab,
-            title,
-            message,
-        }
+        MainArea { tab, message }
     }
 
     fn main_area(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -365,17 +441,25 @@ impl Workbench {
         let content = self
             .main_area
             .clone()
-            .unwrap_or_else(|| self.main_area_content(cx));
-        let Some(tab) = &self.tab else {
+            .unwrap_or_else(|| self.main_area_content());
+        let Some(tab) = self.tabs.active_terminal() else {
             return self.empty_state(&content.message, cx);
         };
+        let bar_height = theme.metrics().control_height + theme.length(LengthToken::Space1);
         div()
             .flex_1()
             .min_w_0()
             .h_full()
             .flex()
             .flex_col()
-            .child(tab_bar(theme, &content.title))
+            .child(
+                AnyView::from(self.tabs.bar().clone()).cached(
+                    StyleRefinement::default()
+                        .w_full()
+                        .h(bar_height)
+                        .flex_none(),
+                ),
+            )
             .child(
                 div().flex_1().min_h_0().child(
                     AnyView::from(tab.clone()).cached(StyleRefinement::default().size_full()),
@@ -424,45 +508,6 @@ impl Workbench {
     }
 }
 
-/// The tab bar with the one tab: `surface.sunken` track, the active Tab in
-/// `surface.raised` with the accent indicator.
-fn tab_bar(theme: &DesktopTheme, title: &str) -> impl IntoElement {
-    let metrics = theme.metrics();
-    let font = theme.font(TextStyle::Title);
-    let space_1 = theme.length(LengthToken::Space1);
-    div()
-        .flex_none()
-        .flex()
-        .items_end()
-        .h(metrics.control_height + space_1)
-        .px(space_1)
-        .bg(theme.color(ColorToken::SurfaceSunken))
-        .child(
-            div()
-                .relative()
-                .flex()
-                .items_center()
-                .h(metrics.control_height)
-                .px(metrics.padding)
-                .rounded_t(theme.length(LengthToken::RadiusButton))
-                .bg(theme.color(ColorToken::SurfaceRaised))
-                .font_family(font.family)
-                .font_weight(font.weight)
-                .text_size(theme.font_size(TextStyle::Title))
-                .text_color(theme.color(ColorToken::TextPrimary))
-                .child(title.to_owned())
-                .child(
-                    div()
-                        .absolute()
-                        .left_0()
-                        .right_0()
-                        .top_0()
-                        .h(theme.length(LengthToken::FocusRingWidth))
-                        .bg(theme.color(ColorToken::Accent)),
-                ),
-        )
-}
-
 fn is_dark(appearance: Appearance, system: WindowAppearance) -> bool {
     match appearance {
         Appearance::Dark => true,
@@ -491,6 +536,40 @@ impl Render for Workbench {
         let theme = self.theme;
         let full_height = || StyleRefinement::default().h_full().flex_none();
         div()
+            .key_context(KEY_CONTEXT)
+            .on_action(cx.listener(|workbench, _: &NewSession, _, _| workbench.new_session()))
+            .on_action(cx.listener(|workbench, _: &CloseTab, window, cx| {
+                workbench.tabs.tabs_mut().close_active();
+                workbench.follow_active_tab(window, cx);
+            }))
+            .on_action(cx.listener(|workbench, _: &NextTab, window, cx| {
+                workbench.tabs.tabs_mut().activate_next(1);
+                workbench.follow_active_tab(window, cx);
+            }))
+            .on_action(cx.listener(|workbench, _: &PreviousTab, window, cx| {
+                workbench.tabs.tabs_mut().activate_next(-1);
+                workbench.follow_active_tab(window, cx);
+            }))
+            .on_action(cx.listener(|workbench, _: &MoveTabLeft, window, cx| {
+                workbench.tabs.tabs_mut().move_active(-1);
+                workbench.refresh(window, cx);
+            }))
+            .on_action(cx.listener(|workbench, _: &MoveTabRight, window, cx| {
+                workbench.tabs.tabs_mut().move_active(1);
+                workbench.refresh(window, cx);
+            }))
+            .on_action(cx.listener(|workbench, _: &ActivateLastTab, window, cx| {
+                workbench.tabs.tabs_mut().activate_last();
+                workbench.follow_active_tab(window, cx);
+            }))
+            .on_action(cx.listener(|w, _: &ActivateTab1, window, cx| w.activate_tab(0, window, cx)))
+            .on_action(cx.listener(|w, _: &ActivateTab2, window, cx| w.activate_tab(1, window, cx)))
+            .on_action(cx.listener(|w, _: &ActivateTab3, window, cx| w.activate_tab(2, window, cx)))
+            .on_action(cx.listener(|w, _: &ActivateTab4, window, cx| w.activate_tab(3, window, cx)))
+            .on_action(cx.listener(|w, _: &ActivateTab5, window, cx| w.activate_tab(4, window, cx)))
+            .on_action(cx.listener(|w, _: &ActivateTab6, window, cx| w.activate_tab(5, window, cx)))
+            .on_action(cx.listener(|w, _: &ActivateTab7, window, cx| w.activate_tab(6, window, cx)))
+            .on_action(cx.listener(|w, _: &ActivateTab8, window, cx| w.activate_tab(7, window, cx)))
             .size_full()
             .flex()
             .bg(theme.color(ColorToken::SurfaceBase))

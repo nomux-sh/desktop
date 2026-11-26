@@ -7,13 +7,16 @@
 //!    and to the first frame with the screen of the session. The process
 //!    start is `NOMUX_DESKTOP_LAUNCH_NS` (nanoseconds after the Unix epoch,
 //!    set by the launcher before `exec`) or else the start of `main`.
-//! 2. Three idle phases (the third one runs after the steps 3 and 4). Each one gives, for its window, the wake-ups for
+//! 2. Four idle phases (the last two run after the steps 3 and 4). Each one gives, for its window, the wake-ups for
 //!    each second (context switches of all threads), the CPU time of the
 //!    process, and the renders of the terminal tab and of the sidebar rows:
 //!    - static: after 60 s without input, over 10 s, with the resident
 //!      memory at its start;
 //!    - blinking cursor: the shell selects a blinking cursor, over 5 s,
 //!      then a steady cursor again;
+//!    - hidden output (after the steps 3 and 4): the client starts seven
+//!      sessions in new tabs, as Cmd-T does, and each one prints 50 lines
+//!      each second; the first tab is active again, over 10 s;
 //!    - working row: the shell starts a second session that reports
 //!      `working` with `nomux status set`, over 10 s.
 //!
@@ -45,6 +48,11 @@ const WORKING_WINDOW: Duration = Duration::from_secs(10);
 const SETTLE: Duration = Duration::from_secs(3);
 const BLINKING_CURSOR_COMMAND: &str = "printf '\\033[1 q'\r";
 const STEADY_CURSOR_COMMAND: &str = "printf '\\033[2 q'\r";
+/// The tabs that print while they are hidden.
+const HIDDEN_TABS: usize = 7;
+/// Prints 50 lines each second.
+const OUTPUT_COMMAND: &str = "while :; do date; sleep 0.02; done\r";
+const HIDDEN_OUTPUT_WINDOW: Duration = Duration::from_secs(10);
 const WORKING_ROW_COMMAND: &str = "nomux new -- sh -c \
     'nomux status set working measuring; exec sleep 100000' >/dev/null\r";
 const KEYS: usize = 20;
@@ -207,13 +215,30 @@ impl Measurement {
         self.0.recording.set(false);
         let flood = last_change.duration_since(flood_started);
 
+        for _ in 0..HIDDEN_TABS {
+            self.open_output_tab(window, cx).await;
+        }
+        let _ = window.update(cx, |workbench, window, cx| {
+            workbench.activate_tab(0, window, cx);
+        });
+        timer(cx, SETTLE).await;
+        let tabs = window
+            .read_with(cx, |workbench, _| workbench.tab_count())
+            .unwrap_or(0);
+        let hidden_output = self.idle(window, HIDDEN_OUTPUT_WINDOW, cx).await;
+
         tab.update(cx, |tab, _| {
             tab.write(WORKING_ROW_COMMAND.as_bytes().to_vec());
         });
         timer(cx, SETTLE).await;
         let working = self.idle(window, WORKING_WINDOW, cx).await;
 
-        let report = self.report(resident, &[static_idle, blinking, working], flood);
+        let report = self.report(
+            resident,
+            &[static_idle, blinking, hidden_output, working],
+            tabs,
+            flood,
+        );
         if let Err(error) = std::fs::write(&self.0.report, report) {
             eprintln!(
                 "nomux-desktop: cannot write {}: {error}",
@@ -221,6 +246,35 @@ impl Measurement {
             );
         }
         let _ = cx.update(|_, cx| cx.quit());
+    }
+
+    /// Starts a session in a new tab, as Cmd-T does, and starts the output
+    /// in it when its shell shows text.
+    async fn open_output_tab(&self, window: WindowHandle<Workbench>, cx: &mut AsyncWindowContext) {
+        let count = |cx: &mut AsyncWindowContext| {
+            window
+                .read_with(cx, |workbench, _| workbench.tab_count())
+                .unwrap_or(0)
+        };
+        let before = count(cx);
+        let _ = window.update(cx, |workbench, _, _| workbench.new_session());
+        let started = Instant::now();
+        while started.elapsed() < SETTLE * 3 {
+            cx.background_executor()
+                .timer(Duration::from_millis(50))
+                .await;
+            let tab = window
+                .read_with(cx, |workbench, _| workbench.tab().cloned())
+                .ok()
+                .flatten();
+            if count(cx) > before
+                && let Some(tab) = tab
+                && tab.read_with(cx, |tab, _| has_text(tab.snapshot()))
+            {
+                tab.update(cx, |tab, _| tab.write(OUTPUT_COMMAND.as_bytes().to_vec()));
+                return;
+            }
+        }
     }
 
     /// Counts what the client does in `duration` without input.
@@ -266,7 +320,13 @@ impl Measurement {
         }
     }
 
-    fn report(&self, resident_kilobytes: Option<u64>, idle: &[Idle; 3], flood: Duration) -> String {
+    fn report(
+        &self,
+        resident_kilobytes: Option<u64>,
+        idle: &[Idle; 4],
+        tabs: usize,
+        flood: Duration,
+    ) -> String {
         let milliseconds = |duration: Option<Duration>| {
             duration.map_or_else(
                 || "null".to_owned(),
@@ -310,7 +370,8 @@ impl Measurement {
         let number = |value: Option<f64>| {
             value.map_or_else(|| "null".to_owned(), |value| format!("{value:.2}"))
         };
-        for (name, idle) in ["static", "blinking_cursor", "working_row"]
+        let _ = writeln!(json, "  \"tabs_in_hidden_output_phase\": {tabs},");
+        for (name, idle) in ["static", "blinking_cursor", "hidden_output", "working_row"]
             .iter()
             .zip(idle)
         {

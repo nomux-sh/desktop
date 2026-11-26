@@ -48,12 +48,6 @@ impl HostState {
         self.workspace = workspace;
     }
 
-    /// The sessions, in the sequence of the daemon.
-    #[must_use]
-    pub fn sessions(&self) -> &[Session] {
-        &self.sessions
-    }
-
     /// Takes the list of the sessions that the daemon sent.
     pub fn set_sessions(&mut self, sessions: Vec<Session>) {
         self.sessions = sessions;

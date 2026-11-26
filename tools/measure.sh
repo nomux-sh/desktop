@@ -6,10 +6,12 @@
 #
 # Needs: the nomux binaries of the pinned revision on PATH, Xvfb or Weston
 # and a Vulkan driver. In the development container:
-#   tools/dev-container/run.sh tools/measure.sh [x11|wayland]
+#   tools/dev-container/run.sh tools/measure.sh [x11|wayland] [client options]
+# Example: tools/measure.sh wayland --reduce-motion
 set -eu
 
 backend=${1:-x11}
+[ $# -gt 0 ] && shift
 
 cargo build --release --locked -p nomux-desktop
 client=$PWD/target/release/nomux-desktop
@@ -42,5 +44,5 @@ case "$backend" in
     ;;
 esac
 sleep 1
-NOMUX_DESKTOP_LAUNCH_NS=$(date +%s%N) "$client" --measure "$report"
+NOMUX_DESKTOP_LAUNCH_NS=$(date +%s%N) "$client" --measure "$report" "$@"
 cat "$report"
