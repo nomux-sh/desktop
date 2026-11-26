@@ -1,0 +1,16 @@
+[package]
+name = "nomux-desktop-model"
+description = "The state of the nomux desktop client: workspace tree, sessions, Agent runs and selection. No GPUI."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+nomux-client.workspace = true
+
+[lints]
+workspace = true
