@@ -3910,6 +3910,7 @@ dependencies = [
  "gpui-pre",
  "gpui-pre-platform",
  "nomux-client",
+ "nomux-core",
  "nomux-desktop-model",
  "nomux-desktop-theme",
  "nomux-sidebar",

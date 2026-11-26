@@ -4,7 +4,7 @@ mod sample;
 
 use nomux_client::{AgentState, SessionState, Sourced, StatusSource};
 use nomux_desktop_model::sidebar::{SessionKind, sidebar};
-use nomux_desktop_model::{GlyphState, ProjectView, Selection};
+use nomux_desktop_model::{GlyphState, ProjectView, Selection, Tabs};
 
 const NOW_MS: u64 = 1_000_000 + 5 * 60_000;
 
@@ -31,7 +31,8 @@ fn rows_that_need_the_user_come_first_and_the_others_keep_their_sequence() {
     );
     let mut selection = Selection::default();
     selection.reconcile(&host);
-    let content = sidebar(&host, &selection, NOW_MS, None).expect("a selected Project");
+    let content =
+        sidebar(&host, &selection, &Tabs::default(), NOW_MS, None).expect("a selected Project");
     let order: Vec<&str> = content
         .rows
         .iter()
@@ -100,7 +101,8 @@ fn an_agent_row_and_a_dormant_shell_row() {
     );
     let mut selection = Selection::default();
     selection.select_project(ProjectView::Project("web".to_owned()), &host);
-    let content = sidebar(&host, &selection, NOW_MS, None).expect("a selected Project");
+    let content =
+        sidebar(&host, &selection, &Tabs::default(), NOW_MS, None).expect("a selected Project");
     let agent_row = &content.rows[0];
     assert_eq!(agent_row.kind, SessionKind::Agent);
     assert_eq!(agent_row.name, "Refactor");
@@ -109,7 +111,7 @@ fn an_agent_row_and_a_dormant_shell_row() {
     assert_eq!(agent_row.age.as_deref(), Some("5m"));
     let shell_row = &content.rows[1];
     assert_eq!(shell_row.kind, SessionKind::Shell);
-    assert_eq!(shell_row.name, "bash");
+    assert_eq!(shell_row.name, "src");
     assert_eq!(shell_row.state, GlyphState::NoProcess);
     assert_eq!(
         shell_row.secondary.as_deref(),
@@ -156,23 +158,126 @@ fn sessions_outside_each_project_have_their_own_view() {
     assert_eq!(selection.session(), Some("home"));
 }
 
+/// The names that the rows show, in the sequence of the rows.
+fn row_names(host: &nomux_desktop_model::HostState, home: Option<&std::path::Path>) -> Vec<String> {
+    let mut selection = Selection::default();
+    selection.reconcile(host);
+    sidebar(host, &selection, &Tabs::default(), NOW_MS, home)
+        .expect("a selected Project")
+        .rows
+        .into_iter()
+        .map(|row| row.name)
+        .collect()
+}
+
 #[test]
-fn a_row_shows_the_session_name_and_else_the_program() {
+fn a_row_shows_the_session_name_else_the_directory() {
     let directory = "/home/user/acme-web";
     let mut named = sample::session("a", directory, "/bin/zsh", SessionState::Running);
     named.name = Some("dev".to_owned());
     let mut unnamed = sample::session("b", directory, "/bin/zsh", SessionState::Running);
     unnamed.started_at = Some(2_000);
-    let mut agent = sample::session("c", directory, "/bin/zsh", SessionState::Running);
+    let mut deeper = sample::session(
+        "c",
+        &format!("{directory}/crates"),
+        "/bin/zsh",
+        SessionState::Running,
+    );
+    deeper.started_at = Some(3_000);
+    let mut agent = sample::session("d", directory, "/bin/zsh", SessionState::Running);
     agent.name = Some("deploy".to_owned());
-    agent.started_at = Some(3_000);
+    agent.started_at = Some(4_000);
     let host = sample::host(
-        vec![named, unnamed, agent],
-        vec![sample::run("c", AgentState::Working)],
+        vec![named, unnamed, deeper, agent],
+        vec![sample::run("d", AgentState::Working)],
+    );
+    assert_eq!(
+        row_names(&host, None),
+        ["dev", "acme-web", "crates", "deploy"]
+    );
+}
+
+#[test]
+fn a_session_in_the_home_directory_shows_a_tilde_not_the_account_name() {
+    let host = sample::host(
+        vec![sample::session(
+            "a",
+            "/home/user/acme-web",
+            "/bin/zsh",
+            SessionState::Running,
+        )],
+        vec![],
+    );
+    let home = std::path::Path::new("/home/user/acme-web");
+    assert_eq!(row_names(&host, Some(home)), ["~"]);
+    assert_eq!(row_names(&host, None), ["acme-web"]);
+}
+
+#[test]
+fn a_shell_row_shows_the_program_that_the_daemon_reports_else_its_own() {
+    let directory = "/home/user/acme-web";
+    let mut shell = sample::session("a", directory, "/bin/zsh", SessionState::Running);
+    shell.started_at = Some(1_000);
+    let mut busy = sample::session("b", directory, "/bin/zsh", SessionState::Running);
+    busy.started_at = Some(2_000);
+    let mut run = sample::run("b", AgentState::Working);
+    run.status.source = StatusSource::ForegroundProgram;
+    run.status.tool = Some(Sourced {
+        value: "vim".to_owned(),
+        source: StatusSource::ForegroundProgram,
+    });
+    let host = sample::host(vec![shell, busy], vec![run]);
+    let mut selection = Selection::default();
+    selection.reconcile(&host);
+    let content =
+        sidebar(&host, &selection, &Tabs::default(), NOW_MS, None).expect("a selected Project");
+    let secondary: Vec<Option<&str>> = content
+        .rows
+        .iter()
+        .map(|row| row.secondary.as_deref())
+        .collect();
+    assert_eq!(secondary, [Some("zsh"), Some("vim")]);
+}
+
+#[test]
+fn an_agent_without_a_title_shows_its_tool() {
+    let directory = "/home/user/acme-web";
+    let mut run = sample::run("a", AgentState::Working);
+    run.status.tool = Some(Sourced {
+        value: "claude".to_owned(),
+        source: StatusSource::Adapter,
+    });
+    let host = sample::host(
+        vec![sample::session(
+            "a",
+            directory,
+            "/bin/zsh",
+            SessionState::Running,
+        )],
+        vec![run],
+    );
+    assert_eq!(row_names(&host, None), ["claude"]);
+}
+
+#[test]
+fn a_row_with_an_open_tab_has_the_mark() {
+    let directory = "/home/user/acme-web";
+    let host = sample::host(
+        vec![
+            sample::session("a", directory, "/bin/zsh", SessionState::Running),
+            sample::session("b", directory, "/bin/zsh", SessionState::Running),
+        ],
+        vec![],
     );
     let mut selection = Selection::default();
     selection.reconcile(&host);
-    let content = sidebar(&host, &selection, NOW_MS, None).expect("a selected Project");
-    let names: Vec<&str> = content.rows.iter().map(|row| row.name.as_str()).collect();
-    assert_eq!(names, ["dev", "zsh", "deploy"]);
+    let mut tabs = Tabs::default();
+    tabs.open("b");
+    let content = sidebar(&host, &selection, &tabs, NOW_MS, None).expect("a selected Project");
+    let marks: Vec<(&str, bool)> = content
+        .rows
+        .iter()
+        .map(|row| (row.session_id.as_str(), row.has_tab))
+        .collect();
+    assert_eq!(marks, [("a", false), ("b", true)]);
 }

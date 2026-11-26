@@ -12,8 +12,11 @@ Version 0.1.0 is the first pre-release. Versions earlier than 1.0.0 are pre-rele
 
 - One window with the project rail, the sidebar of the selected Project, and terminal tabs: a tab for each open session, the platform shortcuts to open, close, switch and move tabs, and the same tabs at the next start ([Tabs](docs/architecture.md#tabs)).
 - The client connects to the daemon of the local host and starts it if it does not run.
+- The menu bar of macOS: nomux (About, Settings..., Hide, Quit), File (New Session, New Session in Project..., Add Project..., Close Tab), Edit (Copy, Paste, Select All), View (Toggle Sidebar, Next Tab, Previous Tab), Window (Minimize, Zoom) and Help (Documentation). Cmd-Q quits the application, and so does the close button of the last window. The sessions continue in the daemon. Settings... shows the configuration file of nomux in the file manager ([Menus and dialogs](docs/architecture.md#menus-and-dialogs)).
+- Add Project: a folder dialog of the system (Cmd-O, the `+` at the bottom of the rail, or the button of the empty state) adds the folder as a Project and selects it.
+- Context menus (right click): a Session row (open in tab, rename, close tab, kill with a question), a tab (close, close others) and a Project tile (new session, remove from sidebar). A row with an open tab has a small mark.
 - The rail: Projects and Groups in the sequence of the user, Groups that open in place, the label rule of a project tile, the aggregate state of a closed Group, the selection bar.
-- The sidebar: the Sessions of the Project with their name, their state glyphs from the Agent runs and the events of the daemon (needs you first), the closed Child work of an agent ("+N"), the age. The sessions outside each Project have their own tile (`~`).
+- The sidebar: the Sessions of the Project with their name (the name of the directory when the session has none) and their program, their state glyphs from the Agent runs and the events of the daemon (needs you first), the closed Child work of an agent ("+N"), the age. The sessions outside each Project have their own tile (`~`).
 - Each terminal tab attaches to its session. Keys with modifiers, function keys, the application cursor mode, bracketed paste, text input and IME composition, mouse reports when the program asks for them, the wheel on the alternate screen, the wheel into the history, selection and copy, paste, resize.
 - A program that asks the terminal (device attributes, cursor position) gets the answer from the session holder of nomux; a colour query gets a fixed dark palette.
 - Closing the window detaches: the sessions continue (`nomux ls`).
@@ -24,9 +27,9 @@ Version 0.1.0 is the first pre-release. Versions earlier than 1.0.0 are pre-rele
 ### What is not built yet
 
 - Worktree rows: the protocol has no worktrees yet. The Sessions are at level 1 of the tree without a worktree row above them.
-- Splits, the settings, the agent view, diffs, extensions, remote hosts, Linux packages (`.deb`, `.rpm`), a notarised macOS image, automatic updates, Windows.
+- Splits, a settings window, the agent view, diffs, extensions, remote hosts, Linux packages (`.deb`, `.rpm`), a notarised macOS image, automatic updates, Windows.
 - The kitty keyboard protocol: keys use the xterm encoding. The application keypad mode: GPUI does not tell a keypad key from the same key of the main block, thus keypad keys send the bytes of the main keys.
-- The shell chips and the team roster of the tab bar, the hover actions of a row (stop, menu), the tooltips, the expanded rail, the motion of a Group that opens, child rows of an agent, the compact density.
+- The foreground program of a shell session (the protocol has no such field: a row shows the program of the command, and the tool that an adapter or the daemon reports), the shell chips and the team roster of the tab bar, the hover actions of a row, the tooltips, the expanded rail, the motion of a Group that opens, child rows of an agent, the compact density.
 - A session that the CLI starts or ends outside the client appears or goes away only at the next event of the host: the protocol has no event for it (nomux-sh/proto#23).
 - A lost connection to the daemon shows a message instead of the last screen (#4). No list of the sessions that need you across all Projects (#2), no notifications (#3).
 
@@ -152,7 +155,7 @@ Why this split: the model holds the rules of the client and must be testable wit
 | Dependency | Why |
 |---|---|
 | `gpui-pre`, `gpui-pre-platform` `=0.3.14` | The UI framework (a weekly snapshot of the GPUI of Zed), and its platform backends. Exact pins: the pair of `gpui-component` 0.11.0. |
-| `nomux-client`, `nomux-term` (git, exact revision) | The protocol client and the terminal state. Not on crates.io yet. |
+| `nomux-client`, `nomux-core`, `nomux-term` (git, exact revision) | The protocol client, the place of the configuration file, and the terminal state. Not on crates.io yet. |
 | `nomux-theme` `=0.3.1` | The design tokens and the shipped themes. |
 | `tokio` (`rt`, `sync`, `macros`) | The runtime of the connection thread: `nomux-client` is async. |
 

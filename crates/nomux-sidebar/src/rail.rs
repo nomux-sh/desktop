@@ -3,14 +3,16 @@
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, Context, Div, ElementId, Hsla, InteractiveElement, IntoElement, ParentElement,
-    Pixels, Render, StatefulInteractiveElement, Styled, Window, div,
+    AnyElement, Context, Div, ElementId, Hsla, InteractiveElement, IntoElement, MouseButton,
+    ParentElement, Pixels, Render, StatefulInteractiveElement, Styled, Window, div,
 };
+use nomux_desktop_model::ProjectView;
+use nomux_desktop_model::menu::MenuTarget;
 use nomux_desktop_model::rail::{RailTile, TileKind, TileTarget};
 use nomux_desktop_theme::{ColorToken, DesktopTheme, LengthToken, TextStyle};
 
-use crate::ClickHandler;
 use crate::glyph::{Mark, mark};
+use crate::{ClickHandler, ContextHandler};
 
 /// The width of the closed rail: the tile and `space.3` on each side.
 #[must_use]
@@ -23,17 +25,28 @@ pub fn rail_width(theme: &DesktopTheme) -> Pixels {
 pub struct RailView {
     theme: DesktopTheme,
     tiles: Vec<RailTile>,
-    on_click: ClickHandler<TileTarget>,
+    handlers: RailHandlers,
+}
+
+/// What a click on a tile, on the add tile, and a right click on a tile do.
+#[derive(Clone)]
+pub struct RailHandlers {
+    /// A click on a tile gets its target.
+    pub on_click: ClickHandler<TileTarget>,
+    /// A click on the add tile at the bottom of the rail.
+    pub on_add: ClickHandler<()>,
+    /// A right click on a tile of a Project.
+    pub on_context: ContextHandler,
 }
 
 impl RailView {
-    /// An empty rail. `on_click` gets the target of a clicked tile.
+    /// An empty rail.
     #[must_use]
-    pub fn new(theme: DesktopTheme, on_click: ClickHandler<TileTarget>) -> Self {
+    pub fn new(theme: DesktopTheme, handlers: RailHandlers) -> Self {
         Self {
             theme,
             tiles: Vec::new(),
-            on_click,
+            handlers,
         }
     }
 
@@ -70,42 +83,50 @@ impl Render for RailView {
         rail(
             &self.tiles,
             &self.theme,
-            &self.on_click,
+            &self.handlers,
             !cx.reduce_motion(),
         )
     }
 }
 
-/// The rail with `tiles`. `on_click` gets the target of a clicked tile.
+/// The rail with `tiles`, and the add tile below them.
 fn rail(
     tiles: &[RailTile],
     theme: &DesktopTheme,
-    on_click: &ClickHandler<TileTarget>,
+    handlers: &RailHandlers,
     turning: bool,
 ) -> impl IntoElement {
     let painter = RailPainter {
         theme,
-        on_click,
+        handlers,
         turning,
     };
     div()
-        .id("project-rail")
         .flex_none()
+        .flex()
+        .flex_col()
         .w(rail_width(theme))
         .h_full()
-        .overflow_y_scroll()
         .bg(theme.color(ColorToken::SurfaceSunken))
         .child(
-            painter
-                .column()
-                .py(theme.length(LengthToken::Space2))
-                .children(tiles.iter().map(|tile| painter.tile(tile, 0))),
+            div()
+                .id("project-rail")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .child(
+                    painter
+                        .column()
+                        .py(theme.length(LengthToken::Space2))
+                        .children(tiles.iter().map(|tile| painter.tile(tile, 0))),
+                ),
         )
+        .child(painter.add_tile())
 }
 
 struct RailPainter<'a> {
     theme: &'a DesktopTheme,
-    on_click: &'a ClickHandler<TileTarget>,
+    handlers: &'a RailHandlers,
     turning: bool,
 }
 
@@ -115,6 +136,28 @@ impl RailPainter<'_> {
             .flex()
             .flex_col()
             .gap(self.theme.length(LengthToken::Space2))
+    }
+
+    /// The tile at the bottom of the rail: "+" adds a Project.
+    fn add_tile(&self) -> impl IntoElement {
+        let theme = self.theme;
+        let side = theme.metrics().control_height;
+        let hover = theme.color(ColorToken::FillHover);
+        let on_add = self.handlers.on_add.clone();
+        div()
+            .id("add-project")
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .my(theme.length(LengthToken::Space2))
+            .ml(theme.length(LengthToken::Space3))
+            .size(side)
+            .rounded(theme.length(LengthToken::RadiusButton))
+            .text_color(theme.color(ColorToken::TextSecondary))
+            .hover(move |style| style.bg(hover))
+            .on_click(move |_, window, cx| on_add(&(), window, cx))
+            .child(self.label("+", theme.color(ColorToken::TextSecondary)))
     }
 
     /// One tile. `depth` is the number of open Groups that hold it.
@@ -156,7 +199,14 @@ impl RailPainter<'_> {
         };
         let hover = button.blend(theme.color(ColorToken::FillHover));
         let target = tile.target.clone();
-        let on_click = self.on_click.clone();
+        let on_click = self.handlers.on_click.clone();
+        let context_target = match &tile.target {
+            TileTarget::Project(ProjectView::Project(id)) => {
+                Some(MenuTarget::Project { id: id.clone() })
+            }
+            _ => None,
+        };
+        let on_context = self.handlers.on_context.clone();
         let mut tile_box = div()
             .id(element_id(&tile.target))
             .relative()
@@ -172,6 +222,11 @@ impl RailPainter<'_> {
                 tile_box.hover(move |style| style.bg(hover))
             })
             .on_click(move |_, window, cx| on_click(&target, window, cx))
+            .on_mouse_down(MouseButton::Right, move |event, window, cx| {
+                if let Some(target) = &context_target {
+                    on_context(&(target.clone(), event.position), window, cx);
+                }
+            })
             .child(self.face(tile));
         if tile.selected {
             tile_box = tile_box.child(self.selection_bar(space_3 - inset));

@@ -7,11 +7,12 @@
 //! continues.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use gpui::{App, AppContext, Context, Entity, Focusable, Window};
 use nomux_desktop_model::{HostState, Tabs};
 use nomux_desktop_theme::DesktopTheme;
+use nomux_sidebar::ContextHandler;
 
 use crate::host_connection::HostConnection;
 use crate::measure::Measurement;
@@ -40,18 +41,17 @@ impl TerminalTabs {
         connection: HostConnection,
         theme: DesktopTheme,
         measurement: Option<Measurement>,
-        handlers: (TabHandler, TabHandler),
+        handlers: (TabHandler, TabHandler, ContextHandler),
         cx: &mut Context<Workbench>,
     ) -> Self {
         let state_path = tab_state::path();
         let restored = tab_state::load(state_path.as_deref());
-        let (on_activate, on_close) = handlers;
         Self {
             tabs: Tabs::default(),
             saved: restored.clone(),
             restored: Some(restored),
             terminals: HashMap::new(),
-            bar: cx.new(|_| TabBarView::new(theme, on_activate, on_close)),
+            bar: cx.new(|_| TabBarView::new(theme, handlers)),
             state_path,
             connection,
             measurement,
@@ -93,6 +93,7 @@ impl TerminalTabs {
     pub(crate) fn sync(
         &mut self,
         host: &HostState,
+        home: Option<&Path>,
         theme: DesktopTheme,
         window: &mut Window,
         cx: &mut Context<Workbench>,
@@ -127,7 +128,7 @@ impl TerminalTabs {
             }
             self.focused = active;
         }
-        let items = self.tabs.items(host);
+        let items = self.tabs.items(host, home);
         self.bar.update(cx, |bar, cx| bar.set_items(items, cx));
         if self.restored.is_none() && self.tabs != self.saved {
             self.saved = self.tabs.clone();

@@ -17,8 +17,8 @@ use nomux_desktop_theme::{ColorToken, DesktopTheme, DurationToken, LengthToken, 
 use nomux_term::Size;
 use nomux_term_view::input::{self, MouseAction, MouseReport};
 use nomux_term_view::{
-    GridSelection, PaintStats, TerminalCaches, TerminalElement, TerminalFrame, TerminalPalette,
-    TerminalSnapshot, TerminalStyle,
+    GridPoint, GridSelection, PaintStats, TerminalCaches, TerminalElement, TerminalFrame,
+    TerminalPalette, TerminalSnapshot, TerminalStyle,
 };
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
@@ -32,12 +32,14 @@ actions!(
         /// Copies the selected cells to the clipboard.
         Copy,
         /// Sends the text of the clipboard to the program.
-        Paste
+        Paste,
+        /// Selects each cell of the screen.
+        SelectAll
     ]
 );
 
-/// The key context of the terminal, for the key bindings of [`Copy`] and
-/// [`Paste`].
+/// The key context of the terminal, for the key bindings of [`Copy`],
+/// [`Paste`] and [`SelectAll`].
 pub(crate) const KEY_CONTEXT: &str = "Terminal";
 
 /// The time without a change of the size before the session gets the new
@@ -384,6 +386,22 @@ impl TerminalTab {
         }
     }
 
+    fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
+        let rows = self.snapshot.screen_rows();
+        let columns = self.snapshot.columns();
+        if rows == 0 || columns == 0 {
+            return;
+        }
+        self.selection = Some(GridSelection {
+            anchor: GridPoint { row: 0, column: 0 },
+            head: GridPoint {
+                row: rows - 1,
+                column: columns - 1,
+            },
+        });
+        cx.notify();
+    }
+
     fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
             self.write(input::paste_bytes(&text, self.snapshot.modes()));
@@ -641,6 +659,7 @@ impl Render for TerminalTab {
             .on_key_down(cx.listener(Self::on_key_down))
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::paste))
+            .on_action(cx.listener(Self::select_all))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_down(MouseButton::Middle, cx.listener(Self::on_mouse_down))
             .on_mouse_down(MouseButton::Right, cx.listener(Self::on_mouse_down))

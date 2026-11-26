@@ -5,6 +5,8 @@
 //! The state of the tabs is saved as text, one session for each line in the
 //! sequence of the tabs, the active one with the prefix `* `.
 
+use std::path::Path;
+
 use crate::glyph_state::GlyphState;
 use crate::host_state::HostState;
 
@@ -20,7 +22,7 @@ pub struct Tabs {
 pub struct TabItem {
     /// The session of the tab.
     pub session_id: String,
-    /// The title: the name of the session, else the name of its program.
+    /// The title: the name that the row of the session shows.
     pub title: String,
     /// The glyph of the state of the session.
     pub state: GlyphState,
@@ -123,6 +125,22 @@ impl Tabs {
         true
     }
 
+    /// Closes each tab except the one of `session_id`, which becomes
+    /// active. Returns the sessions of the closed tabs, or `None` if the
+    /// session has no tab.
+    pub fn close_others(&mut self, session_id: &str) -> Option<Vec<String>> {
+        self.position(session_id)?;
+        let closed = self
+            .sessions
+            .iter()
+            .filter(|id| *id != session_id)
+            .cloned()
+            .collect();
+        self.sessions = vec![session_id.to_owned()];
+        self.active = Some(0);
+        Some(closed)
+    }
+
     /// Activates the tab at `index` (0 is the first). An index after the
     /// last tab does nothing.
     pub fn activate(&mut self, index: usize) {
@@ -178,7 +196,7 @@ impl Tabs {
 
     /// The items of the tab bar.
     #[must_use]
-    pub fn items(&self, host: &HostState) -> Vec<TabItem> {
+    pub fn items(&self, host: &HostState, home: Option<&Path>) -> Vec<TabItem> {
         self.sessions
             .iter()
             .enumerate()
@@ -186,7 +204,8 @@ impl Tabs {
                 let session = host.session(id);
                 TabItem {
                     session_id: id.clone(),
-                    title: session.map_or_else(|| id.clone(), crate::sidebar::session_name),
+                    title: crate::sidebar::session_label(host, id, home)
+                        .unwrap_or_else(|| id.clone()),
                     state: session.map_or(GlyphState::NoProcess, |session| {
                         GlyphState::of_session(session, host.run(id))
                     }),

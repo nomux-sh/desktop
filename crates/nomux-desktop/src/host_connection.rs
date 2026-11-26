@@ -5,7 +5,7 @@
 //! [`HostUpdate`] values. The terminal of an attach is fed on this thread,
 //! never on the UI thread.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::thread;
 
 use nomux_client::{
@@ -31,6 +31,32 @@ pub enum HostRequest {
         /// The working directory.
         directory: Option<PathBuf>,
     },
+    /// Add a Project with `directory`, named `name`, at the end of the top
+    /// level of the workspace tree.
+    AddProject {
+        /// The absolute path of the directory on the host.
+        directory: PathBuf,
+        /// The name of the Project.
+        name: String,
+    },
+    /// Remove the Project with the node identifier `id` from the workspace
+    /// tree. No file and no session changes.
+    RemoveProject {
+        /// The node identifier.
+        id: String,
+    },
+    /// Give a session a name, or no name for `None`.
+    RenameSession {
+        /// The session identifier.
+        id: String,
+        /// The new name.
+        name: Option<String>,
+    },
+    /// End a session.
+    KillSession {
+        /// The session identifier.
+        id: String,
+    },
     /// Attach to the terminal of a session.
     Attach(AttachRequest),
     /// Stop the running daemon and start the daemon that belongs to this
@@ -52,6 +78,9 @@ pub enum HostUpdate {
     Event(HostEvent),
     /// The session that a [`HostRequest::CreateSession`] started.
     SessionCreated(Session),
+    /// The node identifier of the Project that a [`HostRequest::AddProject`]
+    /// added. The workspace tree that has it came before.
+    ProjectAdded(String),
     /// The running daemon lacks a request that the client needs. The client
     /// loaded nothing. [`HostRequest::ReplaceDaemon`] replaces the daemon.
     DaemonOutdated {
@@ -124,6 +153,31 @@ async fn serve(mut requests: UnboundedReceiver<HostRequest>, updates: UnboundedS
             },
             HostRequest::CreateSession { directory } => match control.as_mut() {
                 Some(control) => create_session(control, directory, &updates).await,
+                None => Ok(()),
+            },
+            HostRequest::AddProject { directory, name } => match control.as_mut() {
+                Some(control) => add_project(control, &directory, &name, &updates).await,
+                None => Ok(()),
+            },
+            HostRequest::RemoveProject { id } => match control.as_mut() {
+                Some(control) => {
+                    let removed = control.remove_project(&id).await;
+                    reload_after_change(control, removed.map(drop), &updates).await
+                }
+                None => Ok(()),
+            },
+            HostRequest::RenameSession { id, name } => match control.as_mut() {
+                Some(control) => {
+                    let renamed = control.rename_session(&id, name.as_deref()).await;
+                    reload_after_change(control, renamed.map(drop), &updates).await
+                }
+                None => Ok(()),
+            },
+            HostRequest::KillSession { id } => match control.as_mut() {
+                Some(control) => {
+                    let killed = control.kill_session(&id).await;
+                    reload_after_change(control, killed, &updates).await
+                }
                 None => Ok(()),
             },
             HostRequest::Attach(request) => {
@@ -237,6 +291,38 @@ async fn create_session(
         updates,
     )
     .await
+}
+
+async fn add_project(
+    control: &mut Client,
+    directory: &Path,
+    name: &str,
+    updates: &UnboundedSender<HostUpdate>,
+) -> Result<(), ClientError> {
+    let (_, node) = control.add_project(directory, name, None, None).await?;
+    load(
+        control,
+        Reload {
+            sessions: false,
+            agent_tree: false,
+            workspace: true,
+        },
+        updates,
+    )
+    .await?;
+    let _ = updates.send(HostUpdate::ProjectAdded(node.id));
+    Ok(())
+}
+
+/// Loads the state again after a change that the user made, also when the
+/// change failed: the failure is the result.
+async fn reload_after_change(
+    control: &mut Client,
+    result: Result<(), ClientError>,
+    updates: &UnboundedSender<HostUpdate>,
+) -> Result<(), ClientError> {
+    load(control, Reload::ALL, updates).await?;
+    result
 }
 
 /// Sends each event of the host to the UI until the daemon closes the

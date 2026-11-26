@@ -1,7 +1,10 @@
 //! The root view of the window: the rail, the sidebar and the main area.
 //! It routes the updates of the host to the model and the clicks to the
 //! selection, and gives each view its new content. The model, the views
-//! and the terminal have their own types.
+//! and the terminal have their own types. `commands` has what the context
+//! menus, the menu bar and the dialogs ask for.
+
+mod commands;
 
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -10,27 +13,29 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, AnyView, AppContext, Context, Entity, Focusable, InteractiveElement, IntoElement,
-    ParentElement, Render, StatefulInteractiveElement, StyleRefinement, Styled, Subscription, Task,
-    Window, WindowAppearance, div,
+    ParentElement, Pixels, Point, Render, StatefulInteractiveElement, StyleRefinement, Styled,
+    Subscription, Task, Window, WindowAppearance, div,
 };
-use nomux_client::NodeKind;
+use nomux_desktop_model::menu::{MenuCommand, MenuEntry, MenuTarget};
 use nomux_desktop_model::motion::{MotionContext, working_step};
 use nomux_desktop_model::rail::TileTarget;
 use nomux_desktop_model::{HostState, ProjectView, Selection, rail, sidebar};
 use nomux_desktop_theme::{ColorToken, DesktopTheme, DurationToken, LengthToken, TextStyle};
-use nomux_sidebar::{ClickHandler, RailView, SidebarView};
+use nomux_sidebar::{ClickHandler, ContextHandler, RailHandlers, RailView, SidebarView};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::host_connection::{HostConnection, HostRequest, HostUpdate};
 use crate::measure::Measurement;
+use crate::rename_dialog::RenameDialog;
 use crate::tab_bar::TabHandler;
 use crate::terminal_tab::TerminalTab;
 use crate::terminal_tabs::TerminalTabs;
 use crate::title_bar;
 use crate::{
-    ActivateLastTab, ActivateTab1, ActivateTab2, ActivateTab3, ActivateTab4, ActivateTab5,
-    ActivateTab6, ActivateTab7, ActivateTab8, CloseTab, MoveTabLeft, MoveTabRight, NewSession,
-    NextTab, PreviousTab,
+    About, ActivateLastTab, ActivateTab1, ActivateTab2, ActivateTab3, ActivateTab4, ActivateTab5,
+    ActivateTab6, ActivateTab7, ActivateTab8, AddProject, CloseTab, Minimize, MoveTabLeft,
+    MoveTabRight, NewSession, NewSessionInProject, NextTab, PreviousTab, ToggleSidebar, Zoom,
+    about,
 };
 
 /// The key context of the window, for the key bindings of the tabs.
@@ -62,6 +67,13 @@ struct MainArea {
     outdated_daemon: Option<String>,
 }
 
+/// A context menu that the window shows.
+struct OpenMenu {
+    /// The place of its top left corner, in the window.
+    position: Point<Pixels>,
+    entries: Vec<MenuEntry>,
+}
+
 /// The root view.
 pub struct Workbench {
     theme: DesktopTheme,
@@ -88,6 +100,11 @@ pub struct Workbench {
     /// replaces it.
     outdated_daemon: Option<String>,
     home: Option<PathBuf>,
+    sidebar_visible: bool,
+    context_menu: Option<OpenMenu>,
+    on_choose: ClickHandler<MenuCommand>,
+    on_dismiss: ClickHandler<()>,
+    rename: Option<Entity<RenameDialog>>,
     measurement: Option<Measurement>,
     _tasks: Vec<Task<()>>,
     _subscriptions: Vec<Subscription>,
@@ -143,6 +160,22 @@ impl Workbench {
             });
         let on_new: ClickHandler<()> =
             Self::handler(cx, |workbench, (): &(), _, _| workbench.new_session());
+        let on_context: ContextHandler = Self::handler(
+            cx,
+            |workbench, (target, position): &(MenuTarget, Point<Pixels>), _, cx| {
+                workbench.open_context_menu(target, *position, cx);
+            },
+        );
+        let on_add: ClickHandler<()> = Self::handler(cx, |workbench, (): &(), window, cx| {
+            workbench.choose_project_folder(window, cx);
+        });
+        let on_choose: ClickHandler<MenuCommand> =
+            Self::handler(cx, |workbench, command: &MenuCommand, window, cx| {
+                workbench.run_command(command.clone(), window, cx);
+            });
+        let on_dismiss: ClickHandler<()> = Self::handler(cx, |workbench, (): &(), _, cx| {
+            workbench.close_context_menu(cx)
+        });
         let on_activate: TabHandler = Self::tab_handler(cx, |workbench, id, window, cx| {
             workbench.tabs.tabs_mut().show(id);
             workbench.follow_active_tab(window, cx);
@@ -155,7 +188,7 @@ impl Workbench {
             connection.clone(),
             theme,
             measurement.clone(),
-            (on_activate, on_close),
+            (on_activate, on_close, on_context.clone()),
             cx,
         );
         let title_bar_shown = title_bar::shown(window);
@@ -166,9 +199,16 @@ impl Workbench {
             host: HostState::default(),
             selection: Selection::default(),
             connection,
-            rail: cx.new(|_| RailView::new(theme, on_tile)),
+            rail: cx.new(|_| {
+                let handlers = RailHandlers {
+                    on_click: on_tile,
+                    on_add,
+                    on_context: on_context.clone(),
+                };
+                RailView::new(theme, handlers)
+            }),
             sidebar: cx.new(|cx| {
-                let mut sidebar = SidebarView::new(theme, on_row, on_new);
+                let mut sidebar = SidebarView::new(theme, on_row, on_new, on_context);
                 sidebar.set_header_start(header_start, cx);
                 sidebar
             }),
@@ -181,6 +221,11 @@ impl Workbench {
             failure: None,
             outdated_daemon: None,
             home: std::env::var_os("HOME").map(PathBuf::from),
+            sidebar_visible: true,
+            context_menu: None,
+            on_choose,
+            on_dismiss,
+            rename: None,
             measurement,
             _tasks: vec![updates_task, ages_task],
             _subscriptions: subscriptions,
@@ -251,10 +296,17 @@ impl Workbench {
     /// session, and starts or stops the clock. Each view renders again only
     /// if its content changed.
     fn refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.tabs.sync(&self.host, self.theme, window, cx);
+        self.tabs
+            .sync(&self.host, self.home.as_deref(), self.theme, window, cx);
         self.sync_selection();
         let tiles = rail::rail(&self.host, &self.selection);
-        let content = sidebar::sidebar(&self.host, &self.selection, now_ms(), self.home.as_deref());
+        let content = sidebar::sidebar(
+            &self.host,
+            &self.selection,
+            self.tabs.tabs(),
+            now_ms(),
+            self.home.as_deref(),
+        );
         self.rail.update(cx, |rail, cx| rail.set_tiles(tiles, cx));
         self.sidebar
             .update(cx, |sidebar, cx| sidebar.set_content(content.as_ref(), cx));
@@ -341,8 +393,12 @@ impl Workbench {
                 }
             }
             HostUpdate::SessionCreated(session) => self.created_session = Some(session.id),
+            HostUpdate::ProjectAdded(id) => {
+                self.selection
+                    .select_project(ProjectView::Project(id), &self.host);
+            }
             HostUpdate::DaemonOutdated { running } => self.outdated_daemon = Some(running),
-            HostUpdate::Failed(message) => self.failure = Some(message),
+            HostUpdate::Failed(message) => self.report_failure(message, window, cx),
         }
         self.selection.reconcile(&self.host);
         self.refresh(window, cx);
@@ -419,13 +475,12 @@ impl Workbench {
     /// Starts a session with the shell of the user in the directory of the
     /// shown Project, or in the home directory. It opens in a new tab.
     pub fn new_session(&mut self) {
-        let directory = self.selection.project().and_then(|view| {
-            let node = self.host.workspace().tree.get(view.project_id()?)?;
-            match &node.kind {
-                NodeKind::Project { directory } => Some(directory.clone()),
-                NodeKind::Group => None,
-            }
-        });
+        let directory = self
+            .selection
+            .project()
+            .and_then(ProjectView::project_id)
+            .and_then(|id| self.host.project_directory(id))
+            .map(PathBuf::from);
         self.connection
             .send(HostRequest::CreateSession { directory });
     }
@@ -579,6 +634,14 @@ impl Workbench {
         let meta = theme.font(TextStyle::Meta);
         let on_new: ClickHandler<()> =
             Self::handler(cx, |workbench, (): &(), _, _| workbench.new_session());
+        let on_add: ClickHandler<()> = Self::handler(cx, |workbench, (): &(), window, cx| {
+            workbench.choose_project_folder(window, cx);
+        });
+        let new_label = if self.selection.project().is_some() {
+            "New session"
+        } else {
+            "New session in home"
+        };
         let message = message.to_owned();
         div()
             .flex_1()
@@ -605,9 +668,19 @@ impl Workbench {
                     .child(message),
             )
             .child(
-                nomux_sidebar::button(theme, "New session")
-                    .id("main-new-session")
-                    .on_click(move |_, window, cx| on_new(&(), window, cx)),
+                div()
+                    .flex()
+                    .gap(theme.length(LengthToken::Space2))
+                    .child(
+                        nomux_sidebar::button(theme, new_label)
+                            .id("main-new-session")
+                            .on_click(move |_, window, cx| on_new(&(), window, cx)),
+                    )
+                    .child(
+                        nomux_sidebar::button(theme, "Add a project folder")
+                            .id("main-add-project")
+                            .on_click(move |_, window, cx| on_add(&(), window, cx)),
+                    ),
             )
             .into_any_element()
     }
@@ -720,12 +793,32 @@ impl Render for Workbench {
             .on_action(cx.listener(|w, _: &ActivateTab6, window, cx| w.activate_tab(5, window, cx)))
             .on_action(cx.listener(|w, _: &ActivateTab7, window, cx| w.activate_tab(6, window, cx)))
             .on_action(cx.listener(|w, _: &ActivateTab8, window, cx| w.activate_tab(7, window, cx)))
+            .on_action(cx.listener(|_, _: &About, window, cx| about::show(window, cx)))
+            .on_action(cx.listener(|_, _: &Minimize, window, _| window.minimize_window()))
+            .on_action(cx.listener(|_, _: &Zoom, window, _| window.zoom_window()))
+            .on_action(cx.listener(|workbench, _: &AddProject, window, cx| {
+                workbench.choose_project_folder(window, cx);
+            }))
+            .on_action(
+                cx.listener(|workbench, _: &NewSessionInProject, window, cx| {
+                    workbench.choose_project_for_session(window, cx);
+                }),
+            )
+            .on_action(cx.listener(|workbench, _: &ToggleSidebar, _, cx| {
+                workbench.sidebar_visible = !workbench.sidebar_visible;
+                cx.notify();
+            }))
+            .relative()
             .size_full()
             .flex()
             .bg(theme.color(ColorToken::SurfaceBase))
             .text_color(theme.color(ColorToken::TextPrimary))
             .child(self.rail_column())
-            .child(self.sidebar_column())
+            .when(self.sidebar_visible, |root| {
+                root.child(self.sidebar_column())
+            })
             .child(self.main_area(cx))
+            .children(self.context_menu_element())
+            .children(self.rename.clone())
     }
 }

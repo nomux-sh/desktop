@@ -30,7 +30,7 @@ Rules for coding agents and for people who work in this repository. `CLAUDE.md` 
 - The window root (`Workbench`) routes updates and clicks. It holds no terminal logic and no model rules.
 - GPUI is the `gpui-pre` line with exact pins. Bump `gpui-pre` and `gpui-pre-platform` together, with the smoke test and a run on a Mac. `deny.toml` bans the other GPUI lines.
 - Do not copy code from the GPL crates of Zed (`terminal`, `terminal_view`, `ui`, `rope`, `theme` and the others) and do not read them for an implementation.
-- `nomux-client` and `nomux-term` come from the `nomux` repository by git with an exact `rev`. Move the revision of the two together, and build the nomux binaries of the same revision for the smoke test.
+- `nomux-client`, `nomux-core` and `nomux-term` come from the `nomux` repository by git with an exact `rev`. Move the revision of the three together, and build the nomux binaries of the same revision for the smoke test.
 - A missing feature of the daemon, the client crates or the protocol goes to its repository. Do not work around it in the client.
 - No `unsafe` code.
 - Pin each action in a workflow to a full commit SHA with a version comment.

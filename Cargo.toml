@@ -34,6 +34,7 @@ gpui_platform = { package = "gpui-pre-platform", version = "=0.3.14", default-fe
 # holder (nomux-sh/nomux#121), which v0.5.0 does not have. Move to the first
 # tag that has them.
 nomux-client = { git = "https://github.com/nomux-sh/nomux", rev = "6c961bb0930f7cbf86e82658a7da69dd14f609d4" }
+nomux-core = { git = "https://github.com/nomux-sh/nomux", rev = "6c961bb0930f7cbf86e82658a7da69dd14f609d4" }
 nomux-term = { git = "https://github.com/nomux-sh/nomux", rev = "6c961bb0930f7cbf86e82658a7da69dd14f609d4" }
 # The design tokens and the shipped themes.
 nomux-theme = "=0.3.1"

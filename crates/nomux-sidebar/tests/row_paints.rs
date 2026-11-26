@@ -12,7 +12,7 @@ use nomux_client::{
     AgentRun, AgentState, AgentStatus, AgentTree, EventBody, HostEvent, Node, NodeKind, Session,
     SessionState, Sourced, StatusSource, Workspace, WorkspaceChange, WorkspaceTree,
 };
-use nomux_desktop_model::{HostState, ProjectView, Selection, sidebar};
+use nomux_desktop_model::{HostState, ProjectView, Selection, Tabs, sidebar};
 use nomux_desktop_theme::DesktopTheme;
 use nomux_sidebar::SidebarView;
 
@@ -105,17 +105,28 @@ fn host() -> (HostState, Selection) {
     (host, selection)
 }
 
-/// Gives the sidebar the content of `host`, draws a frame and returns the
-/// paints of each row.
+/// Gives the sidebar the content of `host` with the open `tabs`, draws a
+/// frame and returns the paints of each row.
+fn show_with_tabs(
+    host: &HostState,
+    selection: &Selection,
+    tabs: &Tabs,
+    view: &Entity<SidebarView>,
+    cx: &mut VisualTestContext,
+) -> Vec<(String, u64)> {
+    let content = sidebar::sidebar(host, selection, tabs, 1_000_000, None);
+    view.update(cx, |view, cx| view.set_content(content.as_ref(), cx));
+    draw(view, cx)
+}
+
+/// The same, with no open tab.
 fn show(
     host: &HostState,
     selection: &Selection,
     view: &Entity<SidebarView>,
     cx: &mut VisualTestContext,
 ) -> Vec<(String, u64)> {
-    let content = sidebar::sidebar(host, selection, 1_000_000, None);
-    view.update(cx, |view, cx| view.set_content(content.as_ref(), cx));
-    draw(view, cx)
+    show_with_tabs(host, selection, &Tabs::default(), view, cx)
 }
 
 fn draw(view: &Entity<SidebarView>, cx: &mut VisualTestContext) -> Vec<(String, u64)> {
@@ -138,7 +149,14 @@ fn paints(rows: &[(String, u64)]) -> Vec<u64> {
 #[gpui::test]
 fn a_row_paints_again_only_when_its_values_change(cx: &mut TestAppContext) {
     let theme = DesktopTheme::for_appearance(true);
-    let sidebar = cx.new(|_| SidebarView::new(theme, Rc::new(|_, _, _| {}), Rc::new(|_, _, _| {})));
+    let sidebar = cx.new(|_| {
+        SidebarView::new(
+            theme,
+            Rc::new(|_, _, _| {}),
+            Rc::new(|_, _, _| {}),
+            Rc::new(|_, _, _| {}),
+        )
+    });
     let root = sidebar.clone();
     let (_, cx) = cx.add_window_view(|_, _| Root { sidebar: root });
     let (mut host, selection) = host();
@@ -184,4 +202,48 @@ fn a_row_paints_again_only_when_its_values_change(cx: &mut TestAppContext) {
 
     // A frame without a change paints nothing.
     assert_eq!(paints(&draw(&sidebar, cx)), [1, 1, 4]);
+}
+
+#[gpui::test]
+fn opening_and_closing_a_tab_paints_only_its_row(cx: &mut TestAppContext) {
+    let theme = DesktopTheme::for_appearance(true);
+    let sidebar = cx.new(|_| {
+        SidebarView::new(
+            theme,
+            Rc::new(|_, _, _| {}),
+            Rc::new(|_, _, _| {}),
+            Rc::new(|_, _, _| {}),
+        )
+    });
+    let root = sidebar.clone();
+    let (_, cx) = cx.add_window_view(|_, _| Root { sidebar: root });
+    let (host, selection) = host();
+    let mut tabs = Tabs::default();
+    assert_eq!(
+        paints(&show_with_tabs(&host, &selection, &tabs, &sidebar, cx)),
+        [1, 1, 1]
+    );
+
+    // The row `b` gets the mark of an open tab: only `b` paints.
+    tabs.open("b");
+    assert_eq!(
+        paints(&show_with_tabs(&host, &selection, &tabs, &sidebar, cx)),
+        [1, 2, 1]
+    );
+
+    // The same tabs change no row.
+    assert_eq!(
+        paints(&show_with_tabs(&host, &selection, &tabs, &sidebar, cx)),
+        [1, 2, 1]
+    );
+
+    // The tab closes: only `b` paints, and the mark is gone.
+    tabs.close("b");
+    assert_eq!(
+        paints(&show_with_tabs(&host, &selection, &tabs, &sidebar, cx)),
+        [1, 3, 1]
+    );
+    assert!(sidebar.read_with(cx, |view, cx| {
+        view.rows().iter().all(|row| !row.read(cx).row().has_tab)
+    }));
 }

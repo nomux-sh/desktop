@@ -13,6 +13,7 @@ publish.workspace = true
 gpui.workspace = true
 gpui_platform.workspace = true
 nomux-client.workspace = true
+nomux-core.workspace = true
 nomux-desktop-model.workspace = true
 nomux-desktop-theme.workspace = true
 nomux-sidebar.workspace = true
