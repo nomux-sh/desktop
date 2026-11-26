@@ -9,6 +9,7 @@ use gpui::{
     StrokeOptions, Styled, Window, canvas, fill, point, px, quad, size,
 };
 use nomux_desktop_model::GlyphState;
+use nomux_desktop_model::motion::WORKING_STEPS_PER_TURN;
 use nomux_desktop_theme::{ColorToken, DesktopTheme, DurationToken};
 
 /// The side of the view box of a glyph.
@@ -120,11 +121,14 @@ fn paint_working_arc(
     turn: Option<f32>,
     window: &mut Window,
 ) {
+    // The angle of the current step, thus each tick of the clock shows the
+    // next quarter turn.
     let angle = turn.map_or(0.0, |turn| {
         let seconds = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0.0, |elapsed| elapsed.as_secs_f32() % turn);
-        seconds / turn * TAU
+        let steps = WORKING_STEPS_PER_TURN as f32;
+        (seconds / turn * steps).floor() / steps * TAU
     });
     let radius = unit * 6.0;
     // The static arc starts at the top and ends at the left: M8 2a6 6 0 1 1-6 6.
