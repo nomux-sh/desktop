@@ -31,7 +31,8 @@
 //!    layout and paint. The scenario asks for no frame while it waits: it
 //!    reads the paint of the terminal element, thus each key waits for the
 //!    frame source of the platform as a key of the user does. Only the
-//!    writes of this step count.
+//!    writes of this step count. The pauses between the keys grow by 1 ms,
+//!    thus the keys meet each phase of the frame period.
 //! 4. A flood (`yes | head`): the paint time of the terminal element in each
 //!    frame.
 
@@ -62,6 +63,11 @@ const HIDDEN_OUTPUT_WINDOW: Duration = Duration::from_secs(10);
 const WORKING_ROW_COMMAND: &str = "nomux new -- sh -c \
     'nomux status set working measuring; exec sleep 100000' >/dev/null\r";
 const KEYS: usize = 20;
+/// The pause after a key. Each pause is `KEY_STEP` longer than the one
+/// before, thus the keys meet each phase of a frame period of up to 20 ms.
+/// A pause of a whole number of frames would meet one phase only.
+const KEY_GAP: Duration = Duration::from_millis(100);
+const KEY_STEP: Duration = Duration::from_millis(1);
 const POLL: Duration = Duration::from_millis(1);
 const FLOOD_COMMAND: &str = "yes 'nomux flood line 0123456789' | head -n 300000\r";
 const FLOOD_QUIET: Duration = Duration::from_secs(2);
@@ -242,7 +248,7 @@ impl Measurement {
         timer(cx, Duration::from_millis(500)).await;
 
         self.0.key_step.set(true);
-        for _ in 0..KEYS {
+        for key in 0..KEYS {
             self.0.pending_key.set(None);
             let _ = cx.update(|window, cx| {
                 window.dispatch_keystroke(Keystroke::parse("x").expect("a valid key"), cx);
@@ -253,7 +259,7 @@ impl Measurement {
             {
                 timer(cx, POLL).await;
             }
-            timer(cx, Duration::from_millis(100)).await;
+            timer(cx, KEY_GAP + KEY_STEP * key as u32).await;
         }
         self.0.key_step.set(false);
         self.0.pending_key.set(None);
