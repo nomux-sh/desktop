@@ -25,7 +25,13 @@
 //!    Wake-ups and CPU time come from `/proc`: on other systems they are
 //!    `null`, and the memory too.
 //! 3. Key to paint: 20 keys through the key path of the window, each from
-//!    the dispatch to the end of the paint of the frame with the echo.
+//!    the dispatch to the end of the paint of the frame with the echo, in
+//!    four parts: the round trip through the daemon to the connection
+//!    thread, the wake of the UI thread, the wait for the frame, and the
+//!    layout and paint. The scenario asks for no frame while it waits: it
+//!    reads the paint of the terminal element, thus each key waits for the
+//!    frame source of the platform as a key of the user does. Only the
+//!    writes of this step count.
 //! 4. A flood (`yes | head`): the paint time of the terminal element in each
 //!    frame.
 
@@ -56,7 +62,7 @@ const HIDDEN_OUTPUT_WINDOW: Duration = Duration::from_secs(10);
 const WORKING_ROW_COMMAND: &str = "nomux new -- sh -c \
     'nomux status set working measuring; exec sleep 100000' >/dev/null\r";
 const KEYS: usize = 20;
-const POLL: Duration = Duration::from_millis(2);
+const POLL: Duration = Duration::from_millis(1);
 const FLOOD_COMMAND: &str = "yes 'nomux flood line 0123456789' | head -n 300000\r";
 const FLOOD_QUIET: Duration = Duration::from_secs(2);
 
@@ -70,8 +76,10 @@ struct Inner {
     window_frame: Cell<Option<Duration>>,
     content_frame: Cell<Option<Duration>>,
     last_paint: Cell<Option<Instant>>,
-    pending_input: Cell<Option<(Instant, u64)>>,
-    key_latencies: RefCell<Vec<Duration>>,
+    /// `true` during the step of the keys.
+    key_step: Cell<bool>,
+    pending_key: Cell<Option<PendingKey>>,
+    keys: RefCell<Vec<KeySample>>,
     recording: Cell<bool>,
     paints: RefCell<Vec<PaintStats>>,
     tab_renders: Cell<u64>,
@@ -98,8 +106,9 @@ impl Measurement {
             window_frame: Cell::new(None),
             content_frame: Cell::new(None),
             last_paint: Cell::new(None),
-            pending_input: Cell::new(None),
-            key_latencies: RefCell::default(),
+            key_step: Cell::new(false),
+            pending_key: Cell::new(None),
+            keys: RefCell::default(),
             recording: Cell::new(false),
             paints: RefCell::default(),
             tab_renders: Cell::new(0),
@@ -115,9 +124,68 @@ impl Measurement {
 
     /// The tab sent input when it showed the frame `generation`.
     pub fn input_sent(&self, generation: u64) {
-        if self.0.pending_input.get().is_none() {
-            self.0.pending_input.set(Some((Instant::now(), generation)));
+        if self.0.key_step.get() && self.0.pending_key.get().is_none() {
+            self.0.pending_key.set(Some(PendingKey {
+                sent: Instant::now(),
+                generation,
+                changed: None,
+                received: None,
+                snapshot: None,
+            }));
         }
+    }
+
+    /// The UI thread received the change of the screen that the connection
+    /// thread made at `changed_at`.
+    pub fn change_received(&self, changed_at: Instant) {
+        if let Some(mut key) = self.0.pending_key.get()
+            && key.received.is_none()
+            && changed_at > key.sent
+        {
+            key.changed = Some(changed_at);
+            key.received = Some(Instant::now());
+            self.0.pending_key.set(Some(key));
+        }
+    }
+
+    /// The tab took a new snapshot for the frame that it renders.
+    pub fn snapshot_taken(&self) {
+        if let Some(mut key) = self.0.pending_key.get()
+            && key.received.is_some()
+            && key.snapshot.is_none()
+        {
+            key.snapshot = Some(Instant::now());
+            self.0.pending_key.set(Some(key));
+        }
+    }
+
+    /// Ends the key that waits if `stats` is the paint of its echo.
+    fn key_painted(&self, stats: Option<PaintStats>) -> bool {
+        let Some(key) = self.0.pending_key.get() else {
+            return true;
+        };
+        let Some(stats) =
+            stats.filter(|stats| stats.generation > key.generation && stats.painted_at > key.sent)
+        else {
+            return false;
+        };
+        self.0.keys.borrow_mut().push(KeySample {
+            total: stats.painted_at.duration_since(key.sent),
+            round_trip: key.changed.map(|changed| changed.duration_since(key.sent)),
+            wake: key
+                .changed
+                .zip(key.received)
+                .map(|(changed, received)| received.saturating_duration_since(changed)),
+            frame_wait: key
+                .received
+                .zip(key.snapshot)
+                .map(|(received, snapshot)| snapshot.duration_since(received)),
+            paint: key
+                .snapshot
+                .map(|snapshot| stats.painted_at.saturating_duration_since(snapshot)),
+        });
+        self.0.pending_key.set(None);
+        true
     }
 
     /// The tab renders a frame. The paint of the last frame is in `caches`.
@@ -138,16 +206,6 @@ impl Measurement {
             self.0
                 .content_frame
                 .set(Some(stats.painted_at.duration_since(self.0.launched)));
-        }
-        if let Some((sent, sent_generation)) = self.0.pending_input.get()
-            && stats.generation > sent_generation
-            && stats.painted_at > sent
-        {
-            self.0
-                .key_latencies
-                .borrow_mut()
-                .push(stats.painted_at.duration_since(sent));
-            self.0.pending_input.set(None);
         }
         if self.0.recording.get() {
             self.0.paints.borrow_mut().push(stats);
@@ -183,19 +241,22 @@ impl Measurement {
         });
         timer(cx, Duration::from_millis(500)).await;
 
+        self.0.key_step.set(true);
         for _ in 0..KEYS {
-            self.0.pending_input.set(None);
+            self.0.pending_key.set(None);
             let _ = cx.update(|window, cx| {
                 window.dispatch_keystroke(Keystroke::parse("x").expect("a valid key"), cx);
             });
             let started = Instant::now();
-            while self.0.pending_input.get().is_some() && started.elapsed() < Duration::from_secs(1)
+            while !self.key_painted(tab.read_with(cx, |tab, _| tab.paint_stats()))
+                && started.elapsed() < Duration::from_secs(1)
             {
-                tab.update(cx, |_, cx| cx.notify());
                 timer(cx, POLL).await;
             }
             timer(cx, Duration::from_millis(100)).await;
         }
+        self.0.key_step.set(false);
+        self.0.pending_key.set(None);
         tab.update(cx, |tab, _| tab.write(b"\x15".to_vec()));
         timer(cx, Duration::from_millis(200)).await;
 
@@ -333,8 +394,13 @@ impl Measurement {
                 |duration| format!("{:.1}", duration.as_secs_f64() * 1000.0),
             )
         };
-        let mut latencies = self.0.key_latencies.borrow().clone();
-        latencies.sort();
+        let keys = self.0.keys.borrow();
+        let part = |part: fn(&KeySample) -> Option<Duration>| {
+            let mut values: Vec<Duration> = keys.iter().filter_map(part).collect();
+            values.sort();
+            values
+        };
+        let latencies = part(|key| Some(key.total));
         let mut paints: Vec<Duration> = self
             .0
             .paints
@@ -343,6 +409,14 @@ impl Measurement {
             .map(|stats| stats.duration)
             .collect();
         paints.sort();
+        let mut frame_intervals: Vec<Duration> = self
+            .0
+            .paints
+            .borrow()
+            .windows(2)
+            .map(|pair| pair[1].painted_at.duration_since(pair[0].painted_at))
+            .collect();
+        frame_intervals.sort();
         let percentile = |values: &[Duration], percent: usize| {
             values
                 .get((values.len() * percent / 100).min(values.len().saturating_sub(1)))
@@ -398,6 +472,32 @@ impl Measurement {
             "  \"key_to_paint_max_ms\": {},",
             milliseconds(latencies.last().copied())
         );
+        let _ = writeln!(
+            json,
+            "  \"key_to_paint_ms\": [{}],",
+            keys.iter()
+                .map(|key| milliseconds(Some(key.total)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        for (name, values) in [
+            ("round_trip", part(|key| key.round_trip)),
+            ("ui_wake", part(|key| key.wake)),
+            ("frame_wait", part(|key| key.frame_wait)),
+            ("layout_and_paint", part(|key| key.paint)),
+        ] {
+            let _ = writeln!(
+                json,
+                "  \"key_{name}_p50_ms\": {}, \"key_{name}_max_ms\": {},",
+                milliseconds(percentile(&values, 50)),
+                milliseconds(values.last().copied())
+            );
+        }
+        let _ = writeln!(
+            json,
+            "  \"flood_frame_interval_p50_ms\": {},",
+            milliseconds(percentile(&frame_intervals, 50))
+        );
         let _ = writeln!(json, "  \"flood_frames\": {},", paints.len());
         let _ = writeln!(json, "  \"flood_ms\": {},", milliseconds(Some(flood)));
         let _ = writeln!(
@@ -418,6 +518,29 @@ impl Measurement {
         json.push_str("}\n");
         json
     }
+}
+
+/// A key that waits for the paint of its echo.
+#[derive(Clone, Copy)]
+struct PendingKey {
+    sent: Instant,
+    /// The generation of the screen when the key was sent.
+    generation: u64,
+    /// When the connection thread fed the echo.
+    changed: Option<Instant>,
+    /// When the UI thread received the change.
+    received: Option<Instant>,
+    /// When the tab took the snapshot with the echo.
+    snapshot: Option<Instant>,
+}
+
+/// The time of one key and of its parts.
+struct KeySample {
+    total: Duration,
+    round_trip: Option<Duration>,
+    wake: Option<Duration>,
+    frame_wait: Option<Duration>,
+    paint: Option<Duration>,
 }
 
 /// What the measurement mode measured in one idle phase.

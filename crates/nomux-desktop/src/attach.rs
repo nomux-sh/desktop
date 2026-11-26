@@ -4,6 +4,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::Instant;
 
 use nomux_client::{AttachEnd, AttachOptions, Host, TerminalEvent, WindowSize};
 use nomux_term::{Size, Terminal};
@@ -81,8 +82,9 @@ pub enum TabInput {
 /// What the attach tells its tab.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TabUpdate {
-    /// The screen changed: take a snapshot at the next frame.
-    Changed,
+    /// The screen changed at the instant: take a snapshot at the next
+    /// frame. The measurement mode reads the instant.
+    Changed(Instant),
     /// The connection to the daemon ended; the attach connects again.
     ConnectionLost,
     /// The attach has a connection again.
@@ -163,7 +165,7 @@ pub(crate) async fn run(host: Host, request: AttachRequest) {
                     return;
                 }
             };
-            if wake && updates.send(TabUpdate::Changed).is_err() {
+            if wake && updates.send(TabUpdate::Changed(Instant::now())).is_err() {
                 return;
             }
         }
@@ -174,7 +176,7 @@ pub(crate) async fn run(host: Host, request: AttachRequest) {
                 TabInput::Bytes(bytes) => terminal_input.send(&bytes).await,
                 TabInput::Resize(size) => {
                     if screen.resize(size) {
-                        let _ = updates.send(TabUpdate::Changed);
+                        let _ = updates.send(TabUpdate::Changed(Instant::now()));
                     }
                     control.resize_session(&session_id, window_size(size)).await
                 }
