@@ -33,7 +33,7 @@ pub use workbench::{Appearance, Workbench};
 use crate::measure::Measurement;
 
 /// The size of a new window, in logical pixels.
-const WINDOW_SIZE: (f32, f32) = (1280.0, 800.0);
+pub const WINDOW_SIZE: (f32, f32) = (1280.0, 800.0);
 
 actions!(
     workbench,
@@ -149,7 +149,8 @@ pub fn bind_keys(cx: &mut App) {
     ]);
 }
 
-/// Starts the connection to the daemon and opens the window.
+/// Starts the connection to the daemon and opens the window with
+/// `window_size` in logical pixels.
 ///
 /// # Errors
 ///
@@ -157,11 +158,12 @@ pub fn bind_keys(cx: &mut App) {
 /// cannot open.
 pub fn open_window(
     appearance: Appearance,
+    window_size: (f32, f32),
     measurement: Option<Measurement>,
     cx: &mut App,
 ) -> gpui::Result<WindowHandle<Workbench>> {
     let (connection, updates) = HostConnection::start()?;
-    let bounds = gpui::Bounds::centered(None, size(px(WINDOW_SIZE.0), px(WINDOW_SIZE.1)), cx);
+    let bounds = gpui::Bounds::centered(None, size(px(window_size.0), px(window_size.1)), cx);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         titlebar: Some(TitlebarOptions {
