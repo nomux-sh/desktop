@@ -12,7 +12,7 @@ use nomux_client::{
     AgentTree, Client, ClientError, ClientKind, EventType, Host, HostEvent, NewSession, Session,
     Workspace,
 };
-use nomux_desktop_model::Reload;
+use nomux_desktop_model::{DaemonSupport, Reload, daemon_support};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::attach::{self, AttachRequest};
@@ -33,6 +33,10 @@ pub enum HostRequest {
     },
     /// Attach to the terminal of a session.
     Attach(AttachRequest),
+    /// Stop the running daemon and start the daemon that belongs to this
+    /// client. The sessions continue: their holders do not end with the
+    /// daemon.
+    ReplaceDaemon,
 }
 
 /// What the connection thread tells the UI.
@@ -48,6 +52,12 @@ pub enum HostUpdate {
     Event(HostEvent),
     /// The session that a [`HostRequest::CreateSession`] started.
     SessionCreated(Session),
+    /// The running daemon lacks a request that the client needs. The client
+    /// loaded nothing. [`HostRequest::ReplaceDaemon`] replaces the daemon.
+    DaemonOutdated {
+        /// The version of the running daemon.
+        running: String,
+    },
     /// A request or the connection failed, in English for the user.
     Failed(String),
 }
@@ -102,34 +112,75 @@ async fn serve(mut requests: UnboundedReceiver<HostRequest>, updates: UnboundedS
         Ok(host) => host,
         Err(error) => return report(error),
     };
-    let mut control = match host.client(KIND).await {
-        Ok(client) => client,
+    let mut control = match connect(&host, &updates).await {
+        Ok(control) => control,
         Err(error) => return report(error),
     };
-    if let Err(error) = load(&mut control, Reload::ALL, &updates).await {
-        report(error);
-    }
-    match host.client(KIND).await {
-        Ok(client) => {
-            tokio::spawn(forward_events(client, updates.clone()));
-        }
-        Err(error) => report(error),
-    }
     while let Some(request) = requests.recv().await {
         let result = match request {
-            HostRequest::Load(reload) => load(&mut control, reload, &updates).await,
-            HostRequest::CreateSession { directory } => {
-                create_session(&mut control, directory, &updates).await
-            }
+            HostRequest::Load(reload) => match control.as_mut() {
+                Some(control) => load(control, reload, &updates).await,
+                None => Ok(()),
+            },
+            HostRequest::CreateSession { directory } => match control.as_mut() {
+                Some(control) => create_session(control, directory, &updates).await,
+                None => Ok(()),
+            },
             HostRequest::Attach(request) => {
                 tokio::spawn(attach::run(host.clone(), request));
                 Ok(())
             }
+            HostRequest::ReplaceDaemon => replace_daemon(&host, &mut control, &updates).await,
         };
         if let Err(error) = result {
             report(error);
         }
     }
+}
+
+/// Connects to the daemon, starts it if none runs, and loads the state of
+/// the host. Returns `None` if the daemon is too old: the client then loads
+/// nothing and tells the UI.
+async fn connect(
+    host: &Host,
+    updates: &UnboundedSender<HostUpdate>,
+) -> Result<Option<Client>, ClientError> {
+    let mut control = host.client(KIND).await?;
+    // A daemon without the workspace request answers the first load with an
+    // error that says nothing to the user: ask for its version first.
+    if let DaemonSupport::Outdated { running } =
+        daemon_support(&control.host_info().await?.daemon_version)
+    {
+        let _ = updates.send(HostUpdate::DaemonOutdated { running });
+        return Ok(None);
+    }
+    load(&mut control, Reload::ALL, updates).await?;
+    match host.client(KIND).await {
+        Ok(client) => {
+            tokio::spawn(forward_events(client, updates.clone()));
+        }
+        Err(error) => {
+            let _ = updates.send(HostUpdate::Failed(failure_text(&error)));
+        }
+    }
+    Ok(Some(control))
+}
+
+/// Stops the running daemon and connects to a new one, which the client
+/// starts from its own `nomuxd`. No session ends: each session runs in its
+/// own holder, and the new daemon finds the holders again.
+async fn replace_daemon(
+    host: &Host,
+    control: &mut Option<Client>,
+    updates: &UnboundedSender<HostUpdate>,
+) -> Result<(), ClientError> {
+    let stopped = match control.take() {
+        Some(client) => client,
+        None => host.client(KIND).await?,
+    };
+    stopped.stop_daemon().await?;
+    *control = connect(host, updates).await?;
+    Ok(())
 }
 
 /// The text of a failure for the user. A daemon of an other version gets the

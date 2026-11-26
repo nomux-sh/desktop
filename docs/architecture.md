@@ -83,6 +83,12 @@ The client writes the open tabs after each change, on a background thread, and o
 - macOS: `~/Library/Application Support/sh.nomux.desktop/tabs`
 - Linux: `$XDG_STATE_HOME/nomux-desktop/tabs`, by default `~/.local/state/nomux-desktop/tabs`
 
+## An older daemon
+
+A daemon that runs from an earlier install can be older than the client needs. The connection thread asks the daemon for its version before it loads anything (`HostInfo`). `nomux-desktop-model::daemon_support` compares it with `MINIMUM_DAEMON_VERSION` (0.5.0, the first release that has the workspace request). An older daemon gives `HostUpdate::DaemonOutdated`: the client loads nothing, and the main area shows a card with the version, the version that it needs, and the button "Restart the daemon". A version that the client cannot read is supported.
+
+The button sends `HostRequest::ReplaceDaemon`. The connection thread stops the daemon (`Client::stop_daemon`), starts the `nomuxd` of this app (`Host::client` starts the daemon that is next to the client binary), and loads the host. No session ends: each session runs in its own holder, and the new daemon finds the holders again. The smoke test `a_replaced_daemon_keeps_the_sessions_and_their_processes` checks that the session list and the process identifiers are the same after the replacement.
+
 ## The frame budget
 
 The client does no work when nothing changes. A frame costs a wake-up of the UI thread, a layout and a paint, thus each rule below removes frames, not only paint time.

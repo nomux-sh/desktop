@@ -9,11 +9,14 @@
 //!   sidebar, as plain data for a view.
 //! - [`Tabs`]: the open terminal tabs, the active one, and their saved
 //!   state.
+//! - [`daemon_support`]: whether the running daemon has what the client
+//!   needs.
 //! - [`GlyphState`]: the state that a glyph shows, and its priority.
 //! - [`motion`]: when an animation may run, and the phase of a blinking
 //!   cursor.
 
 mod age;
+mod daemon_support;
 mod glyph_state;
 mod host_state;
 pub mod motion;
@@ -24,6 +27,7 @@ pub mod sidebar;
 mod tabs;
 
 pub use age::format_age;
+pub use daemon_support::{DaemonSupport, MINIMUM_DAEMON_VERSION, daemon_support};
 pub use glyph_state::GlyphState;
 pub use host_state::{HostState, Reload};
 pub use selection::{ProjectView, Selection};
