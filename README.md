@@ -18,6 +18,7 @@ In development. Versions earlier than 1.0.0 are pre-releases: interfaces can cha
 - Closing the window detaches: the sessions continue (`nomux ls`).
 - When no session exists, the client creates none: "New session" starts a shell in the directory of the selected Project or in the home directory.
 - nomux Dark and nomux Light, from the appearance of the system.
+- No work without a change: the working glyph turns and the cursor blinks only while they are visible, and not with reduced motion ([the frame budget](docs/architecture.md#the-frame-budget)).
 
 ### What is not built yet
 
@@ -25,7 +26,7 @@ In development. Versions earlier than 1.0.0 are pre-releases: interfaces can cha
 - More than one tab, splits, the settings, the agent view, diffs, extensions, remote hosts, packages (`.dmg`, `.deb`), Windows.
 - Answers to the queries of a program (device attributes, cursor position, colours): `nomux-term` drops them (nomux-sh/nomux#89).
 - The kitty keyboard protocol: keys use the xterm encoding. The application keypad mode: GPUI does not tell a keypad key from the same key of the main block, thus keypad keys send the bytes of the main keys.
-- The hover actions of a row (stop, menu), the tooltips, the expanded rail, the motion of a Group that opens, child rows of an agent, the compact density, the reduced motion setting.
+- The hover actions of a row (stop, menu), the tooltips, the expanded rail, the motion of a Group that opens, child rows of an agent, the compact density.
 
 ## Build and run
 

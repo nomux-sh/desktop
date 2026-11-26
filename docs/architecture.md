@@ -57,6 +57,38 @@ key down ─▶ TerminalTab::on_key_down ─▶ input::key_bytes(keystroke, mode
 - A new size waits 100 ms without a further change, then goes to the attach: the attach resizes its terminal and sends the size to the daemon on a second connection, as the CLI does.
 - The attach ends when the tab drops its input sender: that is the detach. Closing the window ends the process; the sessions continue in the daemon.
 
+## The frame budget
+
+The client does no work when nothing changes. A frame costs a wake-up of the UI thread, a layout and a paint, thus each rule below removes frames, not only paint time.
+
+### Rules
+
+- **No frame without a change.** A view renders again only when what it shows changes: the tiles of the rail, the header and the sequence of the sidebar rows, the values of one row, the session and the title of the main area, the screen of the terminal. No view calls `request_animation_frame`.
+- **Output in batches.** The connection thread feeds the terminal and wakes the UI only when the `changed` flag goes from false to true. The tab takes one snapshot for each frame and clears the flag. Thus a flood of output makes one notify for each frame, not one for each read.
+- **A clock runs only while something that animates is visible.** There are two clocks, and each one stops by itself:
+  - The working glyph turns at a constant speed, one turn in `motion.indicator`. The clock of the `Workbench` wakes the window 15 times for each turn (`WORKING_STEPS_PER_TURN`), and only while a working glyph is in the rail or the sidebar, the window is visible and the user did not ask for reduced motion. A tick renders only the rows and the rail that show the glyph.
+  - The cursor blinks only when the program asks for a blinking cursor (`DECSCUSR`), the tab has the focus, the window is visible and the user did not ask for reduced motion. One cycle is `motion.indicator`: half shown, half hidden. The blink ends with the cursor shown 10 cycles (`BLINK_CYCLES`) after the last change of the screen or of the focus.
+- **Reduced motion.** GPUI does not read the setting of the system (`App::reduce_motion` changes only with `set_reduce_motion`). The client reads it one time at the start on a background thread (`defaults read com.apple.universalaccess reduceMotion` on macOS, `gsettings get org.gnome.desktop.interface enable-animations` on Linux), and `--reduce-motion` fixes it. The window has motion until the answer arrives. With reduced motion the working glyph is the static arc and the cursor does not blink.
+- **The ages** of the sidebar are computed again one time each minute. Only a row whose age text changed renders again.
+- **Caches.** The rail, each Session row and the terminal tab are cached views (`AnyView::cached`): a frame paints them from the last frame while they were not notified and their bounds are the same. The sidebar and the `Workbench` are not cached views, because of two rules of GPUI 0.3.14: a notify marks each view above the notified one dirty (`Window::mark_view_dirty`), and a cached view that renders again renders each cached view in it again (`prepaint_view` in `view.rs` sets `refreshing`). Thus a change of one row renders the `Workbench` and the sidebar, which are small, and that row; the other rows, the rail and the terminal come from the cache.
+
+### What each platform backend does when nothing changes
+
+The rules above make a frame without a change unnecessary. Whether the UI thread still wakes depends on the frame source of the GPUI backend (`gpui-pre-linux`, `gpui-pre-macos` 0.3.14):
+
+| Backend | Frame source | Wake-ups of an idle window |
+|---|---|---|
+| X11 | A timer at the refresh rate for each visible window: `update_refresh_loop` and `start_refresh_loop` in `src/linux/x11/client.rs` (lines 1969 and 2050). It starts when the window becomes visible and stops only when it is hidden or covered. Each tick calls the frame callback of GPUI, which draws nothing when no view is dirty (`window.rs`, `on_request_frame`). | One for each refresh. The client cannot stop the timer: GPUI has no option for it. The frames are not drawn. |
+| Wayland | Frame callbacks of the compositor. After a frame without a draw the frame loop parks (`complete_frame` in `src/linux/wayland/window.rs`) and waits until a view is dirty. | None. |
+| macOS 14 and later | A `CAMetalDisplayLink` that pauses after an update that did not draw and did not ask for a frame (`MetalFrames::end_frame` in `src/display_link.rs`). | None. |
+| macOS 12 and 13 | The shared `CVDisplayLink` while the window is visible. | One for each refresh, as on X11. |
+
+### Tests
+
+- `nomux-sidebar/tests/row_paints.rs` counts the paints of each Session row for a sequence of events of the host: only the row whose values changed paints, a tick of the clock paints only the working row, and a frame without a change paints nothing.
+- The smoke test checks that the window asks for no frame in 2 seconds without a change, after it showed the screen of a session.
+- `nomux-desktop-model/tests/motion.rs` has the rules of the clocks.
+
 ## Crates
 
 | Crate | Depends on | Responsibility |
