@@ -6,19 +6,19 @@ This repository is a part of [nomux](https://github.com/nomux-sh), a native and 
 
 ## Status
 
-In development. Versions earlier than 1.0.0 are pre-releases: interfaces can change between minor versions.
+Version 0.1.0 is the first pre-release. Versions earlier than 1.0.0 are pre-releases: interfaces can change between minor versions.
 
 ### What works
 
 - One window with the project rail, the sidebar of the selected Project, and terminal tabs: a tab for each open session, the platform shortcuts to open, close, switch and move tabs, and the same tabs at the next start ([Tabs](docs/architecture.md#tabs)).
 - The client connects to the daemon of the local host and starts it if it does not run.
 - The rail: Projects and Groups in the sequence of the user, Groups that open in place, the label rule of a project tile, the aggregate state of a closed Group, the selection bar.
-- The sidebar: the Sessions of the Project with their state glyphs from the Agent runs and the events of the daemon (needs you first), the closed Child work of an agent ("+N"), the age. The sessions outside each Project have their own tile (`~`).
+- The sidebar: the Sessions of the Project with their name, their state glyphs from the Agent runs and the events of the daemon (needs you first), the closed Child work of an agent ("+N"), the age. The sessions outside each Project have their own tile (`~`).
 - Each terminal tab attaches to its session. Keys with modifiers, function keys, the application cursor mode, bracketed paste, text input and IME composition, mouse reports when the program asks for them, the wheel on the alternate screen, the wheel into the history, selection and copy, paste, resize.
 - A program that asks the terminal (device attributes, cursor position) gets the answer from the session holder of nomux; a colour query gets a fixed dark palette.
 - Closing the window detaches: the sessions continue (`nomux ls`).
 - When no session exists, the client creates none: "New session" starts a shell in the directory of the selected Project or in the home directory.
-- nomux Dark and nomux Light, from the appearance of the system.
+- nomux Dark and nomux Light, from the appearance of the system. On macOS the theme reaches the top edge of the window: the window buttons are at the top of the rail, and the line of the sidebar header and the tab bar is the title bar.
 - No work without a change: the working glyph turns and the cursor blinks only while they are visible, and not with reduced motion ([the frame budget](docs/architecture.md#the-frame-budget)).
 
 ### What is not built yet
@@ -27,10 +27,19 @@ In development. Versions earlier than 1.0.0 are pre-releases: interfaces can cha
 - Splits, the settings, the agent view, diffs, extensions, remote hosts, Linux packages (`.deb`, `.rpm`), a notarised macOS image, automatic updates, Windows.
 - The kitty keyboard protocol: keys use the xterm encoding. The application keypad mode: GPUI does not tell a keypad key from the same key of the main block, thus keypad keys send the bytes of the main keys.
 - The shell chips and the team roster of the tab bar, the hover actions of a row (stop, menu), the tooltips, the expanded rail, the motion of a Group that opens, child rows of an agent, the compact density.
+- A session that the CLI starts or ends outside the client appears or goes away only at the next event of the host: the protocol has no event for it (nomux-sh/proto#23).
+- A lost connection to the daemon shows a message instead of the last screen (#4). No list of the sessions that need you across all Projects (#2), no notifications (#3).
 
 ## Install
 
 Each release has a disk image for macOS on Apple silicon (`nomux-<version>-macos-arm64.dmg`), one for macOS on Intel (`nomux-<version>-macos-x86_64.dmg`), an archive for Linux x86_64 (`nomux-desktop-<version>-x86_64-unknown-linux-gnu.tar.gz`) and `SHA256SUMS`. The releases before 1.0.0 are pre-releases.
+
+### System requirements
+
+- macOS 12 or later, on Apple silicon (`arm64` image) or on Intel (`x86_64` image). Tested on macOS 26 on Apple silicon. The Intel image was not tested on an Intel Mac.
+- Linux x86_64 with X11 or Wayland and a Vulkan driver. The archive has no package for a distribution.
+
+### The bundled core and an installed nomux
 
 Each package has the nomux core of the same version: `nomux`, `nomuxd` and `nomux-holder` are next to the client binary (in `nomux.app/Contents/MacOS` on macOS). When no daemon runs, the client starts this `nomuxd`. Do not install the core a second time for the client.
 
@@ -66,7 +75,11 @@ ln -sf /Applications/nomux.app/Contents/MacOS/nomux ~/.local/bin/nomux
 
 ### A daemon of a different version
 
-The client and the daemon agree on a protocol version when they connect. If a daemon of an other nomux version runs (for example from Homebrew) and the two have no common protocol version, the window shows the message of the daemon and the command to stop it: `nomux daemon stop`. The sessions continue without the daemon. Open the client again: it starts its own `nomuxd`.
+The client and the daemon agree on a protocol version when they connect. Version 0.1.0 has the core of nomux 0.5.0 with the query replies of the holder (a revision of `main` after the tag `v0.5.0`).
+
+- If a daemon of nomux 0.5.0 or later already runs (for example from Homebrew or `cargo install`), the client uses it, and the client and your terminal show the same sessions.
+- If the running daemon and the client have no common protocol version, the window shows the message of the daemon and the command that stops it: `nomux daemon stop`. The sessions continue without the daemon. Open the client again: it starts its own `nomuxd`.
+- One host has one daemon. Use one `nomux` CLI: the one of the application (see the link above) or the one that you installed. Do not run two daemons of different versions.
 
 ## Build and run
 
