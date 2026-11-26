@@ -155,3 +155,24 @@ fn sessions_outside_each_project_have_their_own_view() {
     assert_eq!(selection.project(), Some(&ProjectView::Unassigned));
     assert_eq!(selection.session(), Some("home"));
 }
+
+#[test]
+fn a_row_shows_the_session_name_and_else_the_program() {
+    let directory = "/home/user/acme-web";
+    let mut named = sample::session("a", directory, "/bin/zsh", SessionState::Running);
+    named.name = Some("dev".to_owned());
+    let mut unnamed = sample::session("b", directory, "/bin/zsh", SessionState::Running);
+    unnamed.started_at = Some(2_000);
+    let mut agent = sample::session("c", directory, "/bin/zsh", SessionState::Running);
+    agent.name = Some("deploy".to_owned());
+    agent.started_at = Some(3_000);
+    let host = sample::host(
+        vec![named, unnamed, agent],
+        vec![sample::run("c", AgentState::Working)],
+    );
+    let mut selection = Selection::default();
+    selection.reconcile(&host);
+    let content = sidebar(&host, &selection, NOW_MS, None).expect("a selected Project");
+    let names: Vec<&str> = content.rows.iter().map(|row| row.name.as_str()).collect();
+    assert_eq!(names, ["dev", "zsh", "deploy"]);
+}

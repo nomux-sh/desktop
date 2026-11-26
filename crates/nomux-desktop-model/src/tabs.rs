@@ -20,7 +20,7 @@ pub struct Tabs {
 pub struct TabItem {
     /// The session of the tab.
     pub session_id: String,
-    /// The title: the name of the program of the session.
+    /// The title: the name of the session, else the name of its program.
     pub title: String,
     /// The glyph of the state of the session.
     pub state: GlyphState,
@@ -186,7 +186,7 @@ impl Tabs {
                 let session = host.session(id);
                 TabItem {
                     session_id: id.clone(),
-                    title: session.map_or_else(|| id.clone(), crate::sidebar::program_name),
+                    title: session.map_or_else(|| id.clone(), crate::sidebar::session_name),
                     state: session.map_or(GlyphState::NoProcess, |session| {
                         GlyphState::of_session(session, host.run(id))
                     }),
