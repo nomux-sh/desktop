@@ -224,8 +224,9 @@ impl Workbench {
     /// Closes the dialog and gives the focus back to the terminal.
     fn close_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.rename = None;
-        if let Some(terminal) = self.tabs.active_terminal() {
-            window.focus(&terminal.focus_handle(cx), cx);
+        match self.tabs.active_terminal() {
+            Some(terminal) => window.focus(&terminal.focus_handle(cx), cx),
+            None => window.focus(&self.focus, cx),
         }
         cx.notify();
     }
