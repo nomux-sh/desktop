@@ -15,6 +15,7 @@ In development. Versions earlier than 1.0.0 are pre-releases: interfaces can cha
 - The rail: Projects and Groups in the sequence of the user, Groups that open in place, the label rule of a project tile, the aggregate state of a closed Group, the selection bar.
 - The sidebar: the Sessions of the Project with their state glyphs from the Agent runs and the events of the daemon (needs you first), the closed Child work of an agent ("+N"), the age. The sessions outside each Project have their own tile (`~`).
 - Each terminal tab attaches to its session. Keys with modifiers, function keys, the application cursor mode, bracketed paste, text input and IME composition, mouse reports when the program asks for them, the wheel on the alternate screen, the wheel into the history, selection and copy, paste, resize.
+- A program that asks the terminal (device attributes, cursor position) gets the answer from the session holder of nomux; a colour query gets a fixed dark palette.
 - Closing the window detaches: the sessions continue (`nomux ls`).
 - When no session exists, the client creates none: "New session" starts a shell in the directory of the selected Project or in the home directory.
 - nomux Dark and nomux Light, from the appearance of the system.
@@ -24,7 +25,6 @@ In development. Versions earlier than 1.0.0 are pre-releases: interfaces can cha
 
 - Worktree rows: the protocol has no worktrees yet. The Sessions are at level 1 of the tree without a worktree row above them.
 - Splits, the settings, the agent view, diffs, extensions, remote hosts, Linux packages (`.deb`, `.rpm`), a notarised macOS image, automatic updates, Windows.
-- Answers to the queries of a program (device attributes, cursor position, colours): `nomux-term` drops them (nomux-sh/nomux#89).
 - The kitty keyboard protocol: keys use the xterm encoding. The application keypad mode: GPUI does not tell a keypad key from the same key of the main block, thus keypad keys send the bytes of the main keys.
 - The shell chips and the team roster of the tab bar, the hover actions of a row (stop, menu), the tooltips, the expanded rail, the motion of a Group that opens, child rows of an agent, the compact density.
 

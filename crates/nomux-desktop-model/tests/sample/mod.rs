@@ -55,6 +55,7 @@ pub(crate) fn workspace() -> Workspace {
 pub(crate) fn session(id: &str, directory: &str, command: &str, state: SessionState) -> Session {
     Session {
         id: id.to_owned(),
+        name: None,
         state,
         pid: None,
         command: vec![command.to_owned()],
@@ -66,6 +67,10 @@ pub(crate) fn session(id: &str, directory: &str, command: &str, state: SessionSt
         restore_policy: None,
         exit: None,
         damage: None,
+        last_attached_at: None,
+        attached_clients: 0,
+        hibernation: None,
+        pinned: false,
     }
 }
 

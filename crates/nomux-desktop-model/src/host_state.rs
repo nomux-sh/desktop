@@ -96,7 +96,13 @@ impl HostState {
                 }
             }
             EventBody::Snapshot => Reload::ALL,
-            EventBody::ExtensionEvent { .. } | EventBody::Unknown => Reload::default(),
+            // The client does not subscribe to these events yet.
+            EventBody::ExtensionEvent { .. }
+            | EventBody::SessionHibernated(_)
+            | EventBody::SessionWoken { .. }
+            | EventBody::SessionWakeFailed { .. }
+            | EventBody::SessionMemoryLimitReached { .. }
+            | EventBody::Unknown => Reload::default(),
         }
     }
 

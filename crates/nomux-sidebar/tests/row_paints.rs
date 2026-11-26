@@ -30,6 +30,7 @@ impl Render for Root {
 fn session(id: &str) -> Session {
     Session {
         id: id.to_owned(),
+        name: None,
         state: SessionState::Running,
         pid: None,
         command: vec!["bash".to_owned()],
@@ -41,6 +42,10 @@ fn session(id: &str) -> Session {
         restore_policy: None,
         exit: None,
         damage: None,
+        last_attached_at: None,
+        attached_clients: 0,
+        hibernation: None,
+        pinned: false,
     }
 }
 
