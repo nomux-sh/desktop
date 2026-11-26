@@ -1,0 +1,200 @@
+name: CI
+
+# GPUI needs system libraries to link on Linux. The reusable Rust workflow of
+# the organization installs no system package, thus this file has its own
+# Rust jobs with the same pinned actions. The shared checks of the
+# repository come from the reusable workflows:
+# https://github.com/nomux-sh/.github/tree/main/.github/workflows
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  # The libraries that GPUI links on Linux, and the software Vulkan driver
+  # (lavapipe) for the headless screenshot.
+  LINUX_PACKAGES: >-
+    libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev libfreetype-dev
+    libvulkan1 mesa-vulkan-drivers
+
+jobs:
+  fmt:
+    name: fmt
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - name: cargo fmt
+        run: cargo fmt --all --check
+
+  clippy:
+    name: clippy (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the system packages
+        run: |
+          read -ra packages <<< "$LINUX_PACKAGES"
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends "${packages[@]}"
+      - name: Install the toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  test:
+    name: test (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the system packages
+        run: |
+          read -ra packages <<< "$LINUX_PACKAGES"
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends "${packages[@]}"
+      - name: Install the toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: taiki-e/install-action@18101caa61cb89118e2ee749786f33c6d1f8a8cb # v2.90.9
+        with:
+          tool: cargo-nextest@0.9.152
+      - name: Read the nomux revision of Cargo.toml
+        id: nomux
+        run: |
+          rev=$(sed -n 's/^nomux-client = .*rev = "\([0-9a-f]*\)".*/\1/p' Cargo.toml)
+          test -n "$rev"
+          echo "rev=$rev" >> "$GITHUB_OUTPUT"
+      # The smoke test runs the daemon of the same revision as the client
+      # crates. The binaries are built one time for each revision.
+      - name: Cache the nomux binaries
+        id: nomux-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/nomux-bin
+          key: nomux-bin-${{ runner.os }}-${{ steps.nomux.outputs.rev }}
+      - name: Build the nomux binaries
+        if: steps.nomux-cache.outputs.cache-hit != 'true'
+        env:
+          REV: ${{ steps.nomux.outputs.rev }}
+        run: |
+          CARGO_TARGET_DIR="$RUNNER_TEMP/nomux-build" cargo install --locked \
+            --git https://github.com/nomux-sh/nomux --rev "$REV" \
+            --root ~/nomux-bin nomux-cli nomuxd nomux-holder
+      - name: cargo nextest
+        run: cargo nextest run --workspace --locked
+      # nextest does not run doctests.
+      - name: cargo test --doc
+        run: cargo test --workspace --doc --locked
+      - name: Smoke test with the daemon and the headless renderer
+        run: |
+          export PATH="$HOME/nomux-bin/bin:$PATH"
+          cargo nextest run --locked -p nomux-desktop --test smoke --run-ignored only --no-capture
+      - name: Upload the screenshot of the smoke test
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: smoke-screenshot
+          path: target/tmp/smoke.png
+          if-no-files-found: ignore
+
+  # Not a required check: it shows that the client builds on macOS and that
+  # the tests that need no display pass.
+  macos:
+    name: build (macos-15)
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: taiki-e/install-action@18101caa61cb89118e2ee749786f33c6d1f8a8cb # v2.90.9
+        with:
+          tool: cargo-nextest@0.9.152
+      - name: cargo build
+        run: cargo build --workspace --locked
+      - name: cargo nextest
+        run: cargo nextest run --workspace --locked
+
+  deny:
+    name: deny
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - uses: taiki-e/install-action@18101caa61cb89118e2ee749786f33c6d1f8a8cb # v2.90.9
+        with:
+          tool: cargo-deny@0.22.1
+      - name: cargo deny
+        run: cargo deny check
+
+  machete:
+    name: machete
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@18101caa61cb89118e2ee749786f33c6d1f8a8cb # v2.90.9
+        with:
+          tool: cargo-machete@0.10.1
+      - name: cargo machete
+        run: cargo machete
+
+  repo-lint:
+    uses: nomux-sh/.github/.github/workflows/repo-lint.yml@main
+    with:
+      license: code
+      require-changelog: true
+
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      ACTIONLINT_VERSION: 1.7.12
+      ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install actionlint
+        run: |
+          set -euo pipefail
+          archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl --fail --silent --show-error --location --output "$RUNNER_TEMP/$archive" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/$archive"
+          echo "$ACTIONLINT_SHA256  $RUNNER_TEMP/$archive" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" actionlint
+      - name: actionlint
+        run: |
+          "$RUNNER_TEMP/actionlint" -version
+          "$RUNNER_TEMP/actionlint" -color
