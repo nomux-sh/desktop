@@ -16,6 +16,7 @@ use gpui::{
     IntoElement, ParentElement, Pixels, Point, Render, StatefulInteractiveElement, StyleRefinement,
     Styled, Subscription, Task, Window, WindowAppearance, div,
 };
+use nomux_desktop_model::attention::{attention, next_needing_you};
 use nomux_desktop_model::menu::{MenuCommand, MenuEntry, MenuTarget};
 use nomux_desktop_model::motion::{MotionContext, working_step};
 use nomux_desktop_model::rail::TileTarget;
@@ -33,9 +34,9 @@ use crate::terminal_tabs::TerminalTabs;
 use crate::title_bar;
 use crate::{
     About, ActivateLastTab, ActivateTab1, ActivateTab2, ActivateTab3, ActivateTab4, ActivateTab5,
-    ActivateTab6, ActivateTab7, ActivateTab8, AddProject, CloseTab, Minimize, MoveTabLeft,
-    MoveTabRight, NewSession, NewSessionInProject, NextTab, PreviousTab, ToggleSidebar, Zoom,
-    about,
+    ActivateTab6, ActivateTab7, ActivateTab8, AddProject, CloseTab, JumpToAttention, Minimize,
+    MoveTabLeft, MoveTabRight, NewSession, NewSessionInProject, NextTab, PreviousTab,
+    ToggleSidebar, Zoom, about,
 };
 
 /// The key context of the window, for the key bindings of the tabs.
@@ -481,6 +482,21 @@ impl Workbench {
         }
     }
 
+    /// Opens the tab of the next session that needs the user, in any
+    /// Project, and gives it the focus. Does nothing if no session needs the
+    /// user.
+    pub fn jump_to_attention(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let list = attention(&self.host);
+        let Some(id) = next_needing_you(&list, self.tabs.tabs().active()).map(str::to_owned) else {
+            return;
+        };
+        self.tabs.tabs_mut().open(&id);
+        self.follow_active_tab(window, cx);
+        if let Some(terminal) = self.tabs.active_terminal() {
+            window.focus(&terminal.focus_handle(cx), cx);
+        }
+    }
+
     /// Starts a session with the shell of the user in the directory of the
     /// shown Project, or in the home directory. It opens in a new tab.
     pub fn new_session(&mut self) {
@@ -770,6 +786,9 @@ impl Render for Workbench {
         div()
             .key_context(KEY_CONTEXT)
             .on_action(cx.listener(|workbench, _: &NewSession, _, _| workbench.new_session()))
+            .on_action(cx.listener(|workbench, _: &JumpToAttention, window, cx| {
+                workbench.jump_to_attention(window, cx);
+            }))
             .on_action(cx.listener(|workbench, _: &CloseTab, window, cx| {
                 workbench.tabs.tabs_mut().close_active();
                 workbench.follow_active_tab(window, cx);

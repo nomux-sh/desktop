@@ -50,6 +50,8 @@ pub struct SidebarView {
     /// something of the window covers the start of the header.
     header_start: Option<Pixels>,
     rows: Vec<Entity<SessionRowView>>,
+    /// The rows of the attention list, below the header.
+    attention: Vec<Entity<SessionRowView>>,
     on_row: ClickHandler<String>,
     on_new_session: ClickHandler<()>,
     on_context: ContextHandler,
@@ -69,6 +71,7 @@ impl SidebarView {
             header: None,
             header_start: None,
             rows: Vec::new(),
+            attention: Vec::new(),
             on_row,
             on_new_session,
             on_context,
@@ -85,8 +88,30 @@ impl SidebarView {
         });
         let mut changed = header != self.header;
         self.header = header;
-        let new_rows = content.map_or(&[][..], |content| content.rows.as_slice());
-        let mut old_rows = std::mem::take(&mut self.rows);
+        let rows = content.map_or(&[][..], |content| content.rows.as_slice());
+        let attention = content.map_or(&[][..], |content| content.attention.as_slice());
+        changed |= self.sync_rows(Section::Tree, rows, cx);
+        changed |= self.sync_rows(Section::Attention, attention, cx);
+        if changed {
+            cx.notify();
+        }
+    }
+
+    /// Gives the views of a section their rows, in sequence. A row view that
+    /// exists keeps its entity and renders again only if its values changed.
+    /// Returns `true` if the sequence of the views changed.
+    fn sync_rows(
+        &mut self,
+        section: Section,
+        new_rows: &[SessionRow],
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let views = match section {
+            Section::Tree => &mut self.rows,
+            Section::Attention => &mut self.attention,
+        };
+        let mut old_rows = std::mem::take(views);
+        let mut changed = false;
         for row in new_rows {
             let existing = old_rows
                 .iter()
@@ -106,15 +131,12 @@ impl SidebarView {
                         on_context: self.on_context.clone(),
                     };
                     let row = row.clone();
-                    cx.new(|_| SessionRowView::new(row, theme, handlers))
+                    cx.new(|_| SessionRowView::new(row, section, theme, handlers))
                 }
             };
-            self.rows.push(view);
+            views.push(view);
         }
-        changed |= !old_rows.is_empty();
-        if changed {
-            cx.notify();
-        }
+        changed | !old_rows.is_empty()
     }
 
     /// Moves the header text to `start` from the left edge of the sidebar,
@@ -130,28 +152,37 @@ impl SidebarView {
     /// Takes a new theme.
     pub fn set_theme(&mut self, theme: DesktopTheme, cx: &mut Context<Self>) {
         self.theme = theme;
-        for row in &self.rows {
+        for row in self.rows.iter().chain(&self.attention) {
             row.update(cx, |row, cx| row.set_theme(theme, cx));
         }
         cx.notify();
     }
 
-    /// The row views, in their sequence.
+    /// The row views of the tree, in their sequence.
     #[must_use]
     pub fn rows(&self) -> &[Entity<SessionRowView>] {
         &self.rows
     }
 
+    /// The row views of the attention list, in their sequence.
+    #[must_use]
+    pub fn attention_rows(&self) -> &[Entity<SessionRowView>] {
+        &self.attention
+    }
+
     /// `true` if a row shows the working glyph.
     #[must_use]
     pub fn animates(&self, cx: &gpui::App) -> bool {
-        self.rows.iter().any(|row| row.read(cx).row.animates())
+        self.rows
+            .iter()
+            .chain(&self.attention)
+            .any(|row| row.read(cx).row.animates())
     }
 
     /// Paints the working glyphs at the next frame: only the rows that show
     /// one render again.
     pub fn tick(&mut self, cx: &mut Context<Self>) {
-        for row in &self.rows {
+        for row in self.rows.iter().chain(&self.attention) {
             row.update(cx, |row, cx| {
                 if row.row.animates() {
                     cx.notify();
@@ -187,20 +218,44 @@ impl Render for SidebarView {
                         sidebar.child(painter.empty(&self.on_new_session))
                     })
             })
-            .children(self.rows.iter().map(|row| {
-                AnyView::from(row.clone()).cached(
-                    StyleRefinement::default()
-                        .w_full()
-                        .h(row_height)
-                        .flex_none(),
-                )
-            }))
+            .when(!self.attention.is_empty(), |sidebar| {
+                sidebar
+                    .child(painter.section_label(ATTENTION_LABEL))
+                    .children(self.attention.iter().map(|row| cached_row(row, row_height)))
+                    .child(div().h(theme.length(LengthToken::Space2)).flex_none())
+            })
+            .children(self.rows.iter().map(|row| cached_row(row, row_height)))
     }
 }
+
+fn cached_row(row: &Entity<SessionRowView>, height: Pixels) -> impl IntoElement {
+    AnyView::from(row.clone()).cached(StyleRefinement::default().w_full().h(height).flex_none())
+}
+
+/// The part of the sidebar that a row is in. A session can have a row in
+/// each part, thus the part is in the element identifier of the row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Section {
+    Tree,
+    Attention,
+}
+
+impl Section {
+    fn prefix(self) -> &'static str {
+        match self {
+            Self::Tree => "session",
+            Self::Attention => "attention",
+        }
+    }
+}
+
+/// The label above the attention list.
+const ATTENTION_LABEL: &str = "Attention";
 
 /// The view of one Session row.
 pub struct SessionRowView {
     row: SessionRow,
+    section: Section,
     theme: DesktopTheme,
     handlers: RowHandlers,
     paints: u64,
@@ -214,9 +269,10 @@ struct RowHandlers {
 }
 
 impl SessionRowView {
-    fn new(row: SessionRow, theme: DesktopTheme, handlers: RowHandlers) -> Self {
+    fn new(row: SessionRow, section: Section, theme: DesktopTheme, handlers: RowHandlers) -> Self {
         Self {
             row,
+            section,
             theme,
             handlers,
             paints: 0,
@@ -255,7 +311,7 @@ impl Render for SessionRowView {
             theme: &self.theme,
             turning: !cx.reduce_motion(),
         };
-        painter.row(&self.row, &self.handlers)
+        painter.row(&self.row, self.section, &self.handlers)
     }
 }
 
@@ -319,6 +375,21 @@ impl SidebarPainter<'_> {
             })
     }
 
+    /// The label of a section: metadata text at the header text x.
+    fn section_label(&self, label: &str) -> impl IntoElement {
+        let theme = self.theme;
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .h(theme.metrics().row_height)
+            .pl(theme.metrics().padding - theme.length(LengthToken::Space1))
+            .child(
+                self.text(TextStyle::Meta, ColorToken::TextMuted)
+                    .child(label.to_owned()),
+            )
+    }
+
     /// The 16 px slot with the glyph of `size.mark` in its centre.
     fn slot(&self, mark_kind: Mark) -> impl IntoElement {
         div()
@@ -335,7 +406,7 @@ impl SidebarPainter<'_> {
             ))
     }
 
-    fn row(&self, row: &SessionRow, handlers: &RowHandlers) -> AnyElement {
+    fn row(&self, row: &SessionRow, section: Section, handlers: &RowHandlers) -> AnyElement {
         let theme = self.theme;
         let metrics = theme.metrics();
         let space_1 = theme.length(LengthToken::Space1);
@@ -364,7 +435,7 @@ impl SidebarPainter<'_> {
         };
         div()
             .id(gpui::ElementId::Name(
-                format!("session-{}", row.session_id).into(),
+                format!("{}-{}", section.prefix(), row.session_id).into(),
             ))
             .flex()
             .flex_none()

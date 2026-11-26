@@ -97,7 +97,7 @@ fn host() -> (HostState, Selection) {
     });
     host.set_sessions(vec![session("a"), session("b"), session("c")]);
     host.set_agent_tree(AgentTree {
-        runs: Vec::new(),
+        runs: vec![run("c", AgentState::Working, None)],
         attention: None,
     });
     let mut selection = Selection::default();
@@ -166,17 +166,9 @@ fn a_row_paints_again_only_when_its_values_change(cx: &mut TestAppContext) {
     assert_eq!(ids, ["a", "b", "c"]);
     assert_eq!(paints(&first), [1, 1, 1]);
 
-    // The agent in `c` starts to work: only `c` paints.
-    host.apply_event(&event(EventBody::AgentRunChanged(Box::new(run(
-        "c",
-        AgentState::Working,
-        None,
-    )))));
-    assert_eq!(paints(&show(&host, &selection, &sidebar, cx)), [1, 1, 2]);
-
     // A load of the same sessions changes no row.
     host.set_sessions(vec![session("a"), session("b"), session("c")]);
-    assert_eq!(paints(&show(&host, &selection, &sidebar, cx)), [1, 1, 2]);
+    assert_eq!(paints(&show(&host, &selection, &sidebar, cx)), [1, 1, 1]);
 
     // A new message of `c`: only `c` paints.
     host.apply_event(&event(EventBody::AgentRunChanged(Box::new(run(
@@ -184,7 +176,7 @@ fn a_row_paints_again_only_when_its_values_change(cx: &mut TestAppContext) {
         AgentState::Working,
         Some("running the tests"),
     )))));
-    assert_eq!(paints(&show(&host, &selection, &sidebar, cx)), [1, 1, 3]);
+    assert_eq!(paints(&show(&host, &selection, &sidebar, cx)), [1, 1, 2]);
 
     // A rename of the Project changes the header, not the rows.
     host.apply_event(&event(EventBody::WorkspaceChanged {
@@ -194,14 +186,68 @@ fn a_row_paints_again_only_when_its_values_change(cx: &mut TestAppContext) {
             name: "storefront".to_owned(),
         },
     }));
-    assert_eq!(paints(&show(&host, &selection, &sidebar, cx)), [1, 1, 3]);
+    assert_eq!(paints(&show(&host, &selection, &sidebar, cx)), [1, 1, 2]);
 
     // A tick of the clock paints the working glyph of `c` only.
     sidebar.update(cx, |view, cx| view.tick(cx));
-    assert_eq!(paints(&draw(&sidebar, cx)), [1, 1, 4]);
+    assert_eq!(paints(&draw(&sidebar, cx)), [1, 1, 3]);
 
     // A frame without a change paints nothing.
-    assert_eq!(paints(&draw(&sidebar, cx)), [1, 1, 4]);
+    assert_eq!(paints(&draw(&sidebar, cx)), [1, 1, 3]);
+}
+
+fn attention_paints(view: &Entity<SidebarView>, cx: &mut VisualTestContext) -> Vec<(String, u64)> {
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    view.read_with(cx, |view, cx| {
+        view.attention_rows()
+            .iter()
+            .map(|row| {
+                let row = row.read(cx);
+                (row.row().session_id.clone(), row.paints())
+            })
+            .collect()
+    })
+}
+
+#[gpui::test]
+fn the_attention_list_paints_only_what_changes_and_hides_when_empty(cx: &mut TestAppContext) {
+    let theme = DesktopTheme::for_appearance(true);
+    let sidebar = cx.new(|_| {
+        SidebarView::new(
+            theme,
+            Rc::new(|_, _, _| {}),
+            Rc::new(|_, _, _| {}),
+            Rc::new(|_, _, _| {}),
+        )
+    });
+    let root = sidebar.clone();
+    let (_, cx) = cx.add_window_view(|_, _| Root { sidebar: root });
+    let (mut host, selection) = host();
+
+    // `c` works: the list has one row, in the tree `c` too.
+    show(&host, &selection, &sidebar, cx);
+    assert_eq!(attention_paints(&sidebar, cx), [("c".to_owned(), 1)]);
+
+    // A new message of `c` paints its two rows and no other row.
+    host.apply_event(&event(EventBody::AgentRunChanged(Box::new(run(
+        "c",
+        AgentState::Working,
+        Some("running the tests"),
+    )))));
+    assert_eq!(paints(&show(&host, &selection, &sidebar, cx)), [1, 1, 2]);
+    assert_eq!(attention_paints(&sidebar, cx), [("c".to_owned(), 2)]);
+
+    // A frame without a change paints nothing.
+    show(&host, &selection, &sidebar, cx);
+    assert_eq!(paints(&draw(&sidebar, cx)), [1, 1, 2]);
+    assert_eq!(attention_paints(&sidebar, cx), [("c".to_owned(), 2)]);
+
+    // `c` is done and seen: the list is empty, the section goes away.
+    let mut done = run("c", AgentState::Done, None);
+    done.status.seen = true;
+    host.apply_event(&event(EventBody::AgentRunChanged(Box::new(done))));
+    show(&host, &selection, &sidebar, cx);
+    assert!(attention_paints(&sidebar, cx).is_empty());
 }
 
 #[gpui::test]

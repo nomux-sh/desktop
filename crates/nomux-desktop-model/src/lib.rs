@@ -12,11 +12,13 @@
 //! - [`menu`]: the choices of the context menus.
 //! - [`daemon_support`]: whether the running daemon has what the client
 //!   needs.
+//! - [`attention`]: the sessions that need the user, across all Projects.
 //! - [`GlyphState`]: the state that a glyph shows, and its priority.
 //! - [`motion`]: when an animation may run, and the phase of a blinking
 //!   cursor.
 
 mod age;
+pub mod attention;
 mod daemon_support;
 mod glyph_state;
 mod host_state;

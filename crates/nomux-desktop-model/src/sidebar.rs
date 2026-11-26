@@ -10,6 +10,7 @@ use std::path::Path;
 use nomux_client::{AgentRun, Session, SessionState, Sourced, StatusSource};
 
 use crate::age::format_age;
+use crate::attention::attention;
 use crate::glyph_state::GlyphState;
 use crate::host_state::HostState;
 use crate::selection::{ProjectView, Selection};
@@ -24,6 +25,9 @@ pub struct SidebarContent {
     pub needs_you: usize,
     /// The rows: the sessions that need the user first.
     pub rows: Vec<SessionRow>,
+    /// The attention list: the sessions of all Projects that need the user,
+    /// are done and not seen, or work. Empty hides the section.
+    pub attention: Vec<SessionRow>,
 }
 
 /// What runs in a session: the row has a different name font.
@@ -110,7 +114,29 @@ pub fn sidebar(
         title,
         needs_you,
         rows,
+        attention: attention_rows(
+            host,
+            &RowContext {
+                now_ms,
+                home,
+                selection: &Selection::default(),
+                tabs,
+            },
+        ),
     })
+}
+
+/// The rows of the attention list, in its order. A row has the anatomy of a
+/// Session row: the specification has no Project name in a row. No row is
+/// selected: the selection is in the tree below.
+fn attention_rows(host: &HostState, context: &RowContext<'_>) -> Vec<SessionRow> {
+    attention(host)
+        .iter()
+        .filter_map(|item| {
+            let session = host.session(&item.session_id)?;
+            Some(session_row(session, host.run(&session.id), context))
+        })
+        .collect()
 }
 
 /// The sessions of `view` in the sequence of the rows: the sessions that
