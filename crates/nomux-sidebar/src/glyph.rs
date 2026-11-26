@@ -25,8 +25,10 @@ pub enum Mark {
     Open,
 }
 
-/// A mark of `side` pixels in the colour of its state.
-pub fn mark(mark: Mark, side: Pixels, theme: &DesktopTheme) -> impl IntoElement {
+/// A mark of `side` pixels in the colour of its state. With `turning`, the
+/// working glyph has the angle of the current time; without it, the static
+/// arc. The glyph asks for no frame: a clock of the caller paints it again.
+pub fn mark(mark: Mark, side: Pixels, theme: &DesktopTheme, turning: bool) -> impl IntoElement {
     let color = match mark {
         Mark::State(state) => theme.color(state_color(state)),
         Mark::Open => theme.color(ColorToken::TextMuted),
@@ -34,7 +36,10 @@ pub fn mark(mark: Mark, side: Pixels, theme: &DesktopTheme) -> impl IntoElement 
     let turn = theme.duration(DurationToken::MotionIndicator).as_secs_f32();
     canvas(
         |_, _, _| {},
-        move |bounds, (), window, _| paint_mark(mark, bounds, color, turn, window),
+        move |bounds, (), window, _| {
+            let turn = turning.then_some(turn);
+            paint_mark(mark, bounds, color, turn, window);
+        },
     )
     .size(side)
     .flex_none()
@@ -52,7 +57,13 @@ fn state_color(state: GlyphState) -> ColorToken {
     }
 }
 
-fn paint_mark(mark: Mark, bounds: Bounds<Pixels>, color: Hsla, turn: f32, window: &mut Window) {
+fn paint_mark(
+    mark: Mark,
+    bounds: Bounds<Pixels>,
+    color: Hsla,
+    turn: Option<f32>,
+    window: &mut Window,
+) {
     let unit = bounds.size.width / VIEW_BOX;
     let at = |x: f32, y: f32| bounds.origin + point(unit * x, unit * y);
     match mark {
@@ -100,19 +111,21 @@ fn paint_mark(mark: Mark, bounds: Bounds<Pixels>, color: Hsla, turn: f32, window
     }
 }
 
-/// The arc of three quarters, turned clockwise by the time. One turn takes
-/// `motion.indicator`. The glyph asks for the next frame while it shows.
+/// The arc of three quarters. With `turn` (the time of one turn,
+/// `motion.indicator`), turned clockwise by the time; else the static arc.
 fn paint_working_arc(
     center: Point<Pixels>,
     unit: Pixels,
     color: Hsla,
-    turn: f32,
+    turn: Option<f32>,
     window: &mut Window,
 ) {
-    let seconds = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0.0, |elapsed| elapsed.as_secs_f32() % turn);
-    let angle = seconds / turn * TAU;
+    let angle = turn.map_or(0.0, |turn| {
+        let seconds = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0.0, |elapsed| elapsed.as_secs_f32() % turn);
+        seconds / turn * TAU
+    });
     let radius = unit * 6.0;
     // The static arc starts at the top and ends at the left: M8 2a6 6 0 1 1-6 6.
     let start = on_circle(center, radius, -PI / 2.0 + angle);
@@ -123,7 +136,6 @@ fn paint_working_arc(
     if let Ok(path) = path.build() {
         window.paint_path(path, color);
     }
-    window.request_animation_frame();
 }
 
 fn on_circle(center: Point<Pixels>, radius: Pixels, angle: f32) -> Point<Pixels> {

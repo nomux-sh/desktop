@@ -25,7 +25,7 @@ pub use element::{
     GridLayout, PaintStats, TerminalCaches, TerminalElement, TerminalFrame, TerminalStyle,
 };
 pub use glyph_cache::{GlyphCache, GlyphKey, PositionedGlyph};
-pub use paint_plan::{CellRun, CursorMark, GlyphCell, LineKind, LineRun, PaintPlan};
+pub use paint_plan::{CellRun, CursorMark, CursorState, GlyphCell, LineKind, LineRun, PaintPlan};
 pub use palette::TerminalPalette;
 pub use selection::{GridPoint, GridSelection};
 pub use snapshot::{SnapshotCell, TerminalSnapshot};
