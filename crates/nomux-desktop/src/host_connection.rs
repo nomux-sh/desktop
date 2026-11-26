@@ -171,6 +171,8 @@ async fn create_session(
         .create_session(NewSession {
             command: Vec::new(),
             working_directory: directory,
+            name: None,
+            reuse_existing: false,
         })
         .await?;
     let _ = updates.send(HostUpdate::SessionCreated(session));

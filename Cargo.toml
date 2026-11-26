@@ -30,9 +30,11 @@ gpui = { package = "gpui-pre", version = "=0.3.14", default-features = false }
 # macOS (no Xcode Metal toolchain at build time).
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.14", default-features = false, features = ["wayland", "x11", "font-kit", "runtime_shaders"] }
 # The client side of the nomux protocol and the terminal state. Not on
-# crates.io: a revision of `main`, moved to a tag at the next release.
-nomux-client = { git = "https://github.com/nomux-sh/nomux", rev = "1d36b7d2fc96db3b568ba9f217011402afb9ec8d" }
-nomux-term = { git = "https://github.com/nomux-sh/nomux", rev = "1d36b7d2fc96db3b568ba9f217011402afb9ec8d" }
+# crates.io: a revision of `main` after v0.5.0, with the query replies of the
+# holder (nomux-sh/nomux#121), which v0.5.0 does not have. Move to the first
+# tag that has them.
+nomux-client = { git = "https://github.com/nomux-sh/nomux", rev = "6c961bb0930f7cbf86e82658a7da69dd14f609d4" }
+nomux-term = { git = "https://github.com/nomux-sh/nomux", rev = "6c961bb0930f7cbf86e82658a7da69dd14f609d4" }
 # The design tokens and the shipped themes.
 nomux-theme = "=0.3.1"
 # The runtime of the connection thread: nomux-client is async.
