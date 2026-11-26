@@ -1,0 +1,265 @@
+name: Release
+
+# A version tag builds the client for macOS (one disk image for arm64, one
+# for x86_64) and for Linux x86_64 (an archive), and makes a pre-release on
+# GitHub with the images, the archive and SHA256SUMS. Each package has the
+# nomux core binaries (nomux, nomuxd, nomux-holder) of the revision in
+# Cargo.toml. A manual run with `dry-run`, and a pull request that changes
+# the packaging, build the same files as workflow artifacts and make no
+# release.
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - tools/package/**
+      - tools/release/**
+      - assets/icon/**
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Build the packages as workflow artifacts. Create no release.
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# A second run for the same tag waits: a release is not cancelled in the
+# middle of an upload. A newer commit of a pull request cancels the old run.
+concurrency:
+  group: release-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  # `true` when the run makes a release. The condition of the `github-release`
+  # job is the same expression.
+  RELEASE: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry-run) }}
+
+jobs:
+  check:
+    name: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      nomux-rev: ${{ steps.nomux.outputs.rev }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The check of the `main` branch reads the history.
+          fetch-depth: 0
+      - name: Install the toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - name: Read the workspace version
+        id: version
+        run: echo "version=$(tools/release/workspace-version.sh)" >> "$GITHUB_OUTPUT"
+      - name: Read the nomux revision of Cargo.toml
+        id: nomux
+        run: |
+          rev=$(sed -n 's/^nomux-client = .*rev = "\([0-9a-f]*\)".*/\1/p' Cargo.toml)
+          test -n "$rev"
+          echo "rev=$rev" >> "$GITHUB_OUTPUT"
+      - name: Check that the tag is equal to the workspace version
+        if: env.RELEASE == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if [ "$GITHUB_REF_TYPE" != "tag" ] || [ "$GITHUB_REF_NAME" != "v$VERSION" ]; then
+            echo "::error::A release needs the tag v$VERSION. This run is for the $GITHUB_REF_TYPE $GITHUB_REF_NAME."
+            exit 1
+          fi
+      - name: Check that the commit is on main
+        if: env.RELEASE == 'true'
+        run: |
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "::error::The commit of $GITHUB_REF_NAME is not on the main branch."
+            exit 1
+          fi
+      - name: Check that the changelog has the section of the version
+        if: env.RELEASE == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: tools/release/release-notes.sh "$VERSION"
+
+  # One job for each image. The two macOS builds run in parallel on Apple
+  # silicon runners; x86_64 is a cross build with the same SDK.
+  macos:
+    name: package (macos-${{ matrix.architecture }})
+    needs: check
+    runs-on: macos-15
+    timeout-minutes: 45
+    strategy:
+      matrix:
+        include:
+          - architecture: arm64
+            target: aarch64-apple-darwin
+          - architecture: x86_64
+            target: x86_64-apple-darwin
+    env:
+      TARGET: ${{ matrix.target }}
+      NOMUX_REV: ${{ needs.check.outputs.nomux-rev }}
+      # The minimum macOS version of GPUI: gpui-pre-apple compiles its
+      # Metal code for macOS 12.0. Info.plist takes the value from the binary.
+      MACOSX_DEPLOYMENT_TARGET: "12.0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the toolchain and the target
+        run: |
+          rustup toolchain install
+          rustup target add "$TARGET"
+      - name: Install rsvg-convert for the icon
+        run: brew install librsvg
+      # A release builds from the sources only. Other runs use the cache.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: env.RELEASE != 'true'
+        with:
+          key: ${{ matrix.target }}
+      - name: Build the nomux core binaries
+        run: |
+          CARGO_TARGET_DIR="$RUNNER_TEMP/nomux-build" cargo install --locked \
+            --git https://github.com/nomux-sh/nomux --rev "$NOMUX_REV" --target "$TARGET" \
+            --root "$RUNNER_TEMP/nomux-core" nomux-cli nomuxd nomux-holder
+      - name: Build the client
+        run: cargo build --release --locked --target "$TARGET" -p nomux-desktop
+      - name: Make the application and the disk image
+        run: tools/package/macos-app.sh "$TARGET" "$RUNNER_TEMP/nomux-core/bin"
+      - name: Show the signature and the size
+        run: |
+          image=$(ls target/dist/*.dmg)
+          mount=$(hdiutil attach -nobrowse -readonly "$image" | awk -F '\t' '/\/Volumes\// { print $NF }')
+          codesign --display --verbose=2 "$mount/nomux.app"
+          du -sh "$mount/nomux.app" "$image"
+          hdiutil detach "$mount"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: package-macos-${{ matrix.architecture }}
+          path: target/dist/*.dmg
+          if-no-files-found: error
+
+  # Only in a manual dry run: the client with the option `--capture`, for a
+  # picture of the window on a Mac without screen recording. Not in a pull
+  # request, to keep the number of macOS jobs of a pull request low.
+  macos-capture:
+    name: frame capture build (macos-arm64)
+    needs: check
+    if: github.event_name == 'workflow_dispatch' && inputs.dry-run
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "12.0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: frame-capture
+      - name: Build the client with the feature frame-capture
+        run: |
+          cargo build --release --locked -p nomux-desktop --features frame-capture
+          codesign --force --sign - target/release/nomux-desktop
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: frame-capture-macos-arm64
+          path: target/release/nomux-desktop
+          if-no-files-found: error
+
+  linux:
+    name: package (linux-x86_64)
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      TARGET: x86_64-unknown-linux-gnu
+      NOMUX_REV: ${{ needs.check.outputs.nomux-rev }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the system packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev libfreetype-dev
+      - name: Install the toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: env.RELEASE != 'true'
+        with:
+          key: ${{ env.TARGET }}
+      - name: Build the nomux core binaries
+        run: |
+          CARGO_TARGET_DIR="$RUNNER_TEMP/nomux-build" cargo install --locked \
+            --git https://github.com/nomux-sh/nomux --rev "$NOMUX_REV" --target "$TARGET" \
+            --root "$RUNNER_TEMP/nomux-core" nomux-cli nomuxd nomux-holder
+      - name: Build the client
+        run: cargo build --release --locked --target "$TARGET" -p nomux-desktop
+      - name: Make the archive
+        run: |
+          archive=$(tools/package/linux-tarball.sh "$TARGET" "$RUNNER_TEMP/nomux-core/bin")
+          du -h "$archive"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: package-linux-x86_64
+          path: target/dist/*.tar.gz
+          if-no-files-found: error
+
+  checksums:
+    name: checksums
+    needs: [macos, linux]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: package-*
+          path: dist
+          merge-multiple: true
+      - name: Write SHA256SUMS
+        working-directory: dist
+        run: sha256sum ./*.dmg ./*.tar.gz | sed 's| \./| |' | tee SHA256SUMS
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: checksums
+          path: dist/SHA256SUMS
+          if-no-files-found: error
+
+  github-release:
+    name: GitHub release
+    needs: [check, checksums]
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry-run)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create the pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          tools/release/release-notes.sh "$VERSION" > "$RUNNER_TEMP/notes.md"
+          gh release create "$GITHUB_REF_NAME" --verify-tag --prerelease --title "$GITHUB_REF_NAME" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            dist/*.dmg dist/*.tar.gz dist/SHA256SUMS
