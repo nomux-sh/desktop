@@ -148,8 +148,8 @@ fn session_row(
     };
     let title = run.and_then(|run| run.status.title.as_ref().map(|title| title.value.clone()));
     let name = match kind {
-        SessionKind::Agent => title.unwrap_or_else(|| program_name(session)),
-        SessionKind::Shell => program_name(session),
+        SessionKind::Agent => title.unwrap_or_else(|| session_name(session)),
+        SessionKind::Shell => session_name(session),
     };
     let secondary = if session.state == SessionState::Dormant {
         Some("dormant · restores on open".to_owned())
@@ -197,8 +197,16 @@ fn is_agent(run: &AgentRun) -> bool {
         )
 }
 
+/// The name of the session, else the file name of its program.
+pub(crate) fn session_name(session: &Session) -> String {
+    session
+        .name
+        .clone()
+        .unwrap_or_else(|| program_name(session))
+}
+
 /// The file name of the program of the session.
-pub(crate) fn program_name(session: &Session) -> String {
+fn program_name(session: &Session) -> String {
     session
         .command
         .first()
