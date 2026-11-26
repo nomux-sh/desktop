@@ -24,7 +24,7 @@
 //!    alone: a software renderer wakes many threads for each frame.
 //!    Wake-ups and CPU time come from `/proc`: on other systems they are
 //!    `null`, and the memory too.
-//! 3. Key to paint: 20 keys through the key path of the window, each from
+//! 3. Key to paint: 60 keys through the key path of the window, each from
 //!    the dispatch to the end of the paint of the frame with the echo, in
 //!    four parts: the round trip through the daemon to the connection
 //!    thread, the wake of the UI thread, the wait for the frame, and the
@@ -62,9 +62,9 @@ const OUTPUT_COMMAND: &str = "while :; do date; sleep 0.02; done\r";
 const HIDDEN_OUTPUT_WINDOW: Duration = Duration::from_secs(10);
 const WORKING_ROW_COMMAND: &str = "nomux new -- sh -c \
     'nomux status set working measuring; exec sleep 100000' >/dev/null\r";
-const KEYS: usize = 20;
+const KEYS: usize = 60;
 /// The pause after a key. Each pause is `KEY_STEP` longer than the one
-/// before, thus the keys meet each phase of a frame period of up to 20 ms.
+/// before, thus the keys meet each phase of a frame period of up to 60 ms.
 /// A pause of a whole number of frames would meet one phase only.
 const KEY_GAP: Duration = Duration::from_millis(100);
 const KEY_STEP: Duration = Duration::from_millis(1);
