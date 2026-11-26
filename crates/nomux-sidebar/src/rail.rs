@@ -3,8 +3,8 @@
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, Div, ElementId, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels,
-    StatefulInteractiveElement, Styled, div,
+    AnyElement, Context, Div, ElementId, Hsla, InteractiveElement, IntoElement, ParentElement,
+    Pixels, Render, StatefulInteractiveElement, Styled, Window, div,
 };
 use nomux_desktop_model::rail::{RailTile, TileKind, TileTarget};
 use nomux_desktop_theme::{ColorToken, DesktopTheme, LengthToken, TextStyle};
@@ -18,13 +18,76 @@ pub fn rail_width(theme: &DesktopTheme) -> Pixels {
     theme.metrics().control_height + theme.length(LengthToken::Space3) * 2.0
 }
 
+/// The view of the rail. It renders again only when its tiles or the theme
+/// change, or when the clock of the working glyph asks.
+pub struct RailView {
+    theme: DesktopTheme,
+    tiles: Vec<RailTile>,
+    on_click: ClickHandler<TileTarget>,
+}
+
+impl RailView {
+    /// An empty rail. `on_click` gets the target of a clicked tile.
+    #[must_use]
+    pub fn new(theme: DesktopTheme, on_click: ClickHandler<TileTarget>) -> Self {
+        Self {
+            theme,
+            tiles: Vec::new(),
+            on_click,
+        }
+    }
+
+    /// Shows `tiles`. Renders again only if they differ.
+    pub fn set_tiles(&mut self, tiles: Vec<RailTile>, cx: &mut Context<Self>) {
+        if self.tiles != tiles {
+            self.tiles = tiles;
+            cx.notify();
+        }
+    }
+
+    /// Takes a new theme.
+    pub fn set_theme(&mut self, theme: DesktopTheme, cx: &mut Context<Self>) {
+        self.theme = theme;
+        cx.notify();
+    }
+
+    /// `true` if a tile shows the working glyph.
+    #[must_use]
+    pub fn animates(&self) -> bool {
+        self.tiles.iter().any(RailTile::animates)
+    }
+
+    /// Paints the working glyphs at the next frame.
+    pub fn tick(&mut self, cx: &mut Context<Self>) {
+        if self.animates() {
+            cx.notify();
+        }
+    }
+}
+
+impl Render for RailView {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        rail(
+            &self.tiles,
+            &self.theme,
+            &self.on_click,
+            !cx.reduce_motion(),
+        )
+    }
+}
+
 /// The rail with `tiles`. `on_click` gets the target of a clicked tile.
-pub fn rail(
+fn rail(
     tiles: &[RailTile],
     theme: &DesktopTheme,
     on_click: &ClickHandler<TileTarget>,
+    turning: bool,
 ) -> impl IntoElement {
-    let painter = RailPainter { theme, on_click };
+    let painter = RailPainter {
+        theme,
+        on_click,
+        turning,
+    };
     div()
         .id("project-rail")
         .flex_none()
@@ -43,6 +106,7 @@ pub fn rail(
 struct RailPainter<'a> {
     theme: &'a DesktopTheme,
     on_click: &'a ClickHandler<TileTarget>,
+    turning: bool,
 }
 
 impl RailPainter<'_> {
@@ -222,7 +286,7 @@ impl RailPainter<'_> {
             .flex()
             .items_center()
             .justify_center()
-            .child(mark(mark_kind, mark_side, theme));
+            .child(mark(mark_kind, mark_side, theme, self.turning));
         if top {
             corner.top(-overhang - ring)
         } else {

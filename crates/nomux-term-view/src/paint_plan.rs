@@ -72,6 +72,15 @@ pub struct CursorMark {
     pub focused: bool,
 }
 
+/// The state of the cursor that is not in the snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CursorState {
+    /// `true` when the terminal has the focus.
+    pub focused: bool,
+    /// `false` in the hidden half of a blink cycle.
+    pub shown: bool,
+}
+
 /// What one frame paints, in the sequence of painting.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct PaintPlan {
@@ -95,10 +104,11 @@ impl PaintPlan {
         snapshot: &TerminalSnapshot,
         palette: &TerminalPalette,
         selection: Option<&GridSelection>,
-        focused: bool,
+        cursor_state: CursorState,
     ) -> Self {
         let mut plan = Self::default();
-        let cursor = snapshot.visible_cursor();
+        let focused = cursor_state.focused;
+        let cursor = snapshot.visible_cursor().filter(|_| cursor_state.shown);
         let block_cursor_cell = cursor
             .filter(|cursor| focused && cursor.shape == CursorShape::Block)
             .map(|cursor| (cursor.position.row, cursor.position.column));

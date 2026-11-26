@@ -3948,6 +3948,7 @@ name = "nomux-sidebar"
 version = "0.0.0"
 dependencies = [
  "gpui-pre",
+ "nomux-client",
  "nomux-desktop-model",
  "nomux-desktop-theme",
 ]

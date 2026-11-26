@@ -12,6 +12,7 @@ mod attach;
 pub mod fonts;
 mod host_connection;
 pub mod measure;
+pub mod reduced_motion;
 mod terminal_tab;
 mod workbench;
 

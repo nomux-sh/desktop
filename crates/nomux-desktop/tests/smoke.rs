@@ -14,6 +14,10 @@ use gpui::{AppContext, HeadlessAppContext, px, size};
 use nomux_desktop::{Appearance, HostConnection, Workbench, fonts};
 
 const TEXT: &str = "nomux-smoke-text";
+/// The time without a change in which the window must ask for no frame.
+const IDLE: Duration = Duration::from_secs(2);
+/// The interval of the checks of the frame demand.
+const POLL: Duration = Duration::from_millis(20);
 const TEST_NAME: &str = "the_window_shows_the_screen_of_a_session";
 /// Set in the child process that runs the test with a temporary HOME.
 const IN_TEMPORARY_HOME: &str = "NOMUX_DESKTOP_SMOKE_HOME";
@@ -36,6 +40,26 @@ fn run_in_temporary_home() {
         status.success(),
         "the smoke test failed in its temporary HOME"
     );
+}
+
+/// The number of checks in `duration` at which the window wanted a frame:
+/// a view was dirty or a callback waited for the next frame. The session
+/// prints nothing more and its cursor does not blink.
+fn frames_requested_in_idle(cx: &mut HeadlessAppContext, duration: Duration) -> usize {
+    cx.run_until_parked();
+    let started = Instant::now();
+    let mut requested = 0;
+    while started.elapsed() < duration {
+        cx.run_until_parked();
+        // GPUI shows the frame demand of a window only in its diagnostic
+        // state.
+        let state = cx.update(|cx| cx.debug_state().to_string());
+        if state.contains("\"dirty\":true") || !state.contains("\"next_frame_callbacks\":0") {
+            requested += 1;
+        }
+        std::thread::sleep(POLL);
+    }
+    requested
 }
 
 fn nomux(arguments: &[&str]) {
@@ -103,6 +127,7 @@ fn the_window_shows_the_screen_of_a_session() {
         std::thread::sleep(Duration::from_millis(100));
     }
     let screenshot = screenshot.expect("at least one frame");
+    let frames = frames_requested_in_idle(&mut cx, IDLE);
     let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
     screenshot
         .save(directory.join("smoke.png"))
@@ -112,6 +137,10 @@ fn the_window_shows_the_screen_of_a_session() {
     assert!(
         started.elapsed() < Duration::from_secs(20),
         "the tab did not show the text of the session"
+    );
+    assert_eq!(
+        frames, 0,
+        "the window asked for frames without a change in {IDLE:?}"
     );
     // The rail, the sidebar and the terminal have different tones: a blank
     // frame has one colour.

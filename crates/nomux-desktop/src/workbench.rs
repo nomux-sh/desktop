@@ -1,20 +1,23 @@
 //! The root view of the window: the rail, the sidebar and the main area.
 //! It routes the updates of the host to the model and the clicks to the
-//! selection. The model and the terminal have their own types.
+//! selection, and gives each view its new content. The model, the views
+//! and the terminal have their own types.
 
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use gpui::{
-    AnyElement, AppContext, Context, Entity, Focusable, InteractiveElement, IntoElement,
-    ParentElement, Render, StatefulInteractiveElement, Styled, Task, Window, WindowAppearance, div,
+    AnyElement, AnyView, AppContext, Context, Entity, Focusable, InteractiveElement, IntoElement,
+    ParentElement, Render, StatefulInteractiveElement, StyleRefinement, Styled, Subscription, Task,
+    Window, WindowAppearance, div,
 };
 use nomux_client::NodeKind;
+use nomux_desktop_model::motion::{MotionContext, working_step};
 use nomux_desktop_model::rail::TileTarget;
 use nomux_desktop_model::{HostState, ProjectView, Selection, rail, sidebar};
-use nomux_desktop_theme::{ColorToken, DesktopTheme, LengthToken, TextStyle};
-use nomux_sidebar::ClickHandler;
+use nomux_desktop_theme::{ColorToken, DesktopTheme, DurationToken, LengthToken, TextStyle};
+use nomux_sidebar::{ClickHandler, RailView, SidebarView};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::host_connection::{HostConnection, HostRequest, HostUpdate};
@@ -33,6 +36,19 @@ pub enum Appearance {
     Light,
 }
 
+/// The interval of the check of the ages in the sidebar: the shortest age
+/// step is one minute.
+const AGE_INTERVAL: Duration = Duration::from_secs(60);
+
+/// What the main area shows: the root view renders again only when it
+/// changes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MainArea {
+    tab: Option<String>,
+    title: String,
+    message: String,
+}
+
 /// The root view.
 pub struct Workbench {
     theme: DesktopTheme,
@@ -40,7 +56,12 @@ pub struct Workbench {
     host: HostState,
     selection: Selection,
     connection: HostConnection,
+    rail: Entity<RailView>,
+    sidebar: Entity<SidebarView>,
     tab: Option<Entity<TerminalTab>>,
+    main_area: Option<MainArea>,
+    /// The clock of the working glyphs: runs only while one is visible.
+    clock: Option<Task<()>>,
     /// The session that the user created; it is selected when the list of
     /// the sessions has it.
     created_session: Option<String>,
@@ -48,6 +69,7 @@ pub struct Workbench {
     home: Option<PathBuf>,
     measurement: Option<Measurement>,
     _tasks: Vec<Task<()>>,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl Workbench {
@@ -70,23 +92,113 @@ impl Workbench {
                 }
             }
         });
-        cx.observe_window_appearance(window, |workbench, window, cx| {
-            workbench.follow_appearance(window, cx);
-        })
-        .detach();
+        let ages_task = cx.spawn_in(window, async move |workbench, cx| {
+            loop {
+                cx.background_executor().timer(AGE_INTERVAL).await;
+                if workbench
+                    .update_in(cx, |workbench, window, cx| workbench.refresh(window, cx))
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        });
+        let subscriptions = vec![
+            cx.observe_window_appearance(window, |workbench, window, cx| {
+                workbench.follow_appearance(window, cx);
+            }),
+            cx.observe_window_visibility(window, |workbench, _, window, cx| {
+                workbench.sync_clock(window, cx);
+            }),
+        ];
+        let theme = DesktopTheme::for_appearance(is_dark(appearance, window.appearance()));
+        let on_tile: ClickHandler<TileTarget> = Self::handler(cx, Self::click_tile);
+        let on_row: ClickHandler<String> =
+            Self::handler(cx, |workbench, id: &String, window, cx| {
+                workbench.click_session(id, window, cx);
+            });
+        let on_new: ClickHandler<()> =
+            Self::handler(cx, |workbench, (): &(), _, _| workbench.new_session());
         Self {
-            theme: DesktopTheme::for_appearance(is_dark(appearance, window.appearance())),
+            theme,
             appearance,
             host: HostState::default(),
             selection: Selection::default(),
             connection,
+            rail: cx.new(|_| RailView::new(theme, on_tile)),
+            sidebar: cx.new(|_| SidebarView::new(theme, on_row, on_new)),
             tab: None,
+            main_area: None,
+            clock: None,
             created_session: None,
             failure: None,
             home: std::env::var_os("HOME").map(PathBuf::from),
             measurement,
-            _tasks: vec![updates_task],
+            _tasks: vec![updates_task, ages_task],
+            _subscriptions: subscriptions,
         }
+    }
+
+    /// The sidebar view.
+    #[must_use]
+    pub fn sidebar(&self) -> &Entity<SidebarView> {
+        &self.sidebar
+    }
+
+    /// The system setting of reduced motion changed.
+    pub fn motion_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.sync_clock(window, cx);
+        if let Some(tab) = &self.tab {
+            tab.update(cx, |tab, cx| tab.motion_changed(window, cx));
+        }
+    }
+
+    /// Gives the rail and the sidebar their content, the main area its
+    /// session, and starts or stops the clock. Each view renders again only
+    /// if its content changed.
+    fn refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let tiles = rail::rail(&self.host, &self.selection);
+        let content = sidebar::sidebar(&self.host, &self.selection, now_ms(), self.home.as_deref());
+        self.rail.update(cx, |rail, cx| rail.set_tiles(tiles, cx));
+        self.sidebar
+            .update(cx, |sidebar, cx| sidebar.set_content(content.as_ref(), cx));
+        self.sync_tab(window, cx);
+        self.sync_clock(window, cx);
+        let main_area = Some(self.main_area_content(cx));
+        if main_area != self.main_area {
+            self.main_area = main_area;
+            cx.notify();
+        }
+    }
+
+    /// Runs the clock of the working glyphs while one is visible and motion
+    /// is allowed; stops it otherwise.
+    fn sync_clock(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let motion = MotionContext {
+            window_visible: window.is_visible(),
+            reduce_motion: cx.reduce_motion(),
+        };
+        let animates = self.rail.read(cx).animates() || self.sidebar.read(cx).animates(cx);
+        if !(animates && motion.allows_motion()) {
+            self.clock = None;
+            return;
+        }
+        if self.clock.is_some() {
+            return;
+        }
+        let step = working_step(self.theme.duration(DurationToken::MotionIndicator));
+        self.clock = Some(cx.spawn(async move |workbench, cx| {
+            loop {
+                cx.background_executor().timer(step).await;
+                let ticked = workbench.update(cx, |workbench, cx| {
+                    workbench.rail.update(cx, |rail, cx| rail.tick(cx));
+                    workbench.sidebar.update(cx, |sidebar, cx| sidebar.tick(cx));
+                });
+                if ticked.is_err() {
+                    return;
+                }
+            }
+        }));
     }
 
     /// The terminal tab, if a session is selected.
@@ -97,8 +209,11 @@ impl Workbench {
 
     fn follow_appearance(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.theme = DesktopTheme::for_appearance(is_dark(self.appearance, window.appearance()));
+        let theme = self.theme;
+        self.rail.update(cx, |rail, cx| rail.set_theme(theme, cx));
+        self.sidebar
+            .update(cx, |sidebar, cx| sidebar.set_theme(theme, cx));
         if let Some(tab) = &self.tab {
-            let theme = self.theme;
             tab.update(cx, |tab, cx| tab.set_theme(&theme, cx));
         }
         cx.notify();
@@ -124,8 +239,7 @@ impl Workbench {
             HostUpdate::Failed(message) => self.failure = Some(message),
         }
         self.selection.reconcile(&self.host);
-        self.sync_tab(window, cx);
-        cx.notify();
+        self.refresh(window, cx);
     }
 
     /// Shows the Project of a session and selects the session.
@@ -172,18 +286,16 @@ impl Workbench {
             TileTarget::Project(view) => self.selection.select_project(view.clone(), &self.host),
             TileTarget::Group(id) => self.selection.toggle_group(id),
         }
-        self.sync_tab(window, cx);
-        cx.notify();
+        self.refresh(window, cx);
     }
 
     fn click_session(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.selection.select_session(id);
-        self.sync_tab(window, cx);
+        self.refresh(window, cx);
         if let Some(tab) = &self.tab {
             let focus = tab.focus_handle(cx);
             window.focus(&focus, cx);
         }
-        cx.notify();
     }
 
     /// Starts a session with the shell of the user in the directory of the
@@ -212,37 +324,23 @@ impl Workbench {
         })
     }
 
-    fn main_area(&self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = &self.theme;
-        let Some(tab) = &self.tab else {
-            return self.empty_state(cx);
-        };
-        let title = tab.read(cx).session_id().to_owned();
-        let name = self
-            .host
-            .session(&title)
-            .and_then(|session| session.command.first().cloned())
-            .and_then(|program| {
-                std::path::Path::new(&program)
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-            })
-            .unwrap_or(title);
-        div()
-            .flex_1()
-            .min_w_0()
-            .h_full()
-            .flex()
-            .flex_col()
-            .child(tab_bar(theme, &name))
-            .child(div().flex_1().min_h_0().child(tab.clone()))
-            .into_any_element()
-    }
-
-    fn empty_state(&self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = &self.theme;
-        let font = theme.font(TextStyle::Title);
-        let meta = theme.font(TextStyle::Meta);
+    /// What the main area shows now.
+    fn main_area_content(&self, cx: &Context<Self>) -> MainArea {
+        let tab = self
+            .tab
+            .as_ref()
+            .map(|tab| tab.read(cx).session_id().to_owned());
+        let title = tab.as_deref().map_or_else(String::new, |id| {
+            self.host
+                .session(id)
+                .and_then(|session| session.command.first().cloned())
+                .and_then(|program| {
+                    std::path::Path::new(&program)
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                })
+                .unwrap_or_else(|| id.to_owned())
+        });
         let place = self
             .selection
             .project()
@@ -251,12 +349,48 @@ impl Workbench {
                 || "your home directory".to_owned(),
                 |node| node.name.clone(),
             );
-        let on_new: ClickHandler<()> =
-            Self::handler(cx, |workbench, (): &(), _, _| workbench.new_session());
         let message = self
             .failure
             .clone()
             .unwrap_or_else(|| format!("A new session starts a shell in {place}."));
+        MainArea {
+            tab,
+            title,
+            message,
+        }
+    }
+
+    fn main_area(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = &self.theme;
+        let content = self
+            .main_area
+            .clone()
+            .unwrap_or_else(|| self.main_area_content(cx));
+        let Some(tab) = &self.tab else {
+            return self.empty_state(&content.message, cx);
+        };
+        div()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .flex()
+            .flex_col()
+            .child(tab_bar(theme, &content.title))
+            .child(
+                div().flex_1().min_h_0().child(
+                    AnyView::from(tab.clone()).cached(StyleRefinement::default().size_full()),
+                ),
+            )
+            .into_any_element()
+    }
+
+    fn empty_state(&self, message: &str, cx: &mut Context<Self>) -> AnyElement {
+        let theme = &self.theme;
+        let font = theme.font(TextStyle::Title);
+        let meta = theme.font(TextStyle::Meta);
+        let on_new: ClickHandler<()> =
+            Self::handler(cx, |workbench, (): &(), _, _| workbench.new_session());
+        let message = message.to_owned();
         div()
             .flex_1()
             .h_full()
@@ -355,27 +489,19 @@ impl Render for Workbench {
             window.on_next_frame(move |_, _| measurement.window_painted());
         }
         let theme = self.theme;
-        let tiles = rail::rail(&self.host, &self.selection);
-        let content = sidebar::sidebar(&self.host, &self.selection, now_ms(), self.home.as_deref());
-        let on_tile: ClickHandler<TileTarget> = Self::handler(cx, Self::click_tile);
-        let on_row: ClickHandler<String> =
-            Self::handler(cx, |workbench, id: &String, window, cx| {
-                workbench.click_session(id, window, cx)
-            });
-        let on_new: ClickHandler<()> =
-            Self::handler(cx, |workbench, (): &(), _, _| workbench.new_session());
+        let full_height = || StyleRefinement::default().h_full().flex_none();
         div()
             .size_full()
             .flex()
             .bg(theme.color(ColorToken::SurfaceBase))
             .text_color(theme.color(ColorToken::TextPrimary))
-            .child(nomux_sidebar::rail(&tiles, &theme, &on_tile))
-            .child(nomux_sidebar::sidebar(
-                content.as_ref(),
-                &theme,
-                &on_row,
-                &on_new,
-            ))
+            .child(
+                AnyView::from(self.rail.clone())
+                    .cached(full_height().w(nomux_sidebar::rail_width(&theme))),
+            )
+            // Not cached: a cached view that renders again renders each
+            // cached view in it again. The rows in it are cached.
+            .child(self.sidebar.clone())
             .child(self.main_area(cx))
     }
 }

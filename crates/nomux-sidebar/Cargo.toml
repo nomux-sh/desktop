@@ -14,5 +14,9 @@ gpui.workspace = true
 nomux-desktop-model.workspace = true
 nomux-desktop-theme.workspace = true
 
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+nomux-client.workspace = true
+
 [lints]
 workspace = true

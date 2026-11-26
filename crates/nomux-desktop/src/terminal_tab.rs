@@ -3,7 +3,7 @@
 
 use std::ops::Range;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui::{
     App, Bounds, ClipboardItem, Context, EntityInputHandler, FocusHandle, Focusable,
@@ -12,7 +12,8 @@ use gpui::{
     Subscription, Task, UTF16Selection, Window, actions, div,
 };
 use nomux_client::AttachEnd;
-use nomux_desktop_theme::{ColorToken, DesktopTheme, LengthToken, TextStyle};
+use nomux_desktop_model::motion::{MotionContext, blink_phase};
+use nomux_desktop_theme::{ColorToken, DesktopTheme, DurationToken, LengthToken, TextStyle};
 use nomux_term::Size;
 use nomux_term_view::input::{self, MouseAction, MouseReport};
 use nomux_term_view::{
@@ -78,8 +79,22 @@ pub struct TerminalTab {
     marked_text: Option<String>,
     status: TabStatus,
     resize: Option<Task<()>>,
+    blink: CursorBlink,
     measurement: Option<Measurement>,
     _subscriptions: Vec<Subscription>,
+}
+
+/// The blink of a cursor that the program asked to blink. It runs while the
+/// tab has the focus, the window is visible and the user did not ask for
+/// reduced motion, and it ends [`nomux_desktop_model::motion::BLINK_CYCLES`]
+/// cycles after the last change.
+struct CursorBlink {
+    /// One cycle: `motion.indicator`.
+    cycle: Duration,
+    shown: bool,
+    /// The snapshot generation at the last restart.
+    generation: u64,
+    _clock: Option<Task<()>>,
 }
 
 struct Attached {
@@ -102,8 +117,17 @@ impl TerminalTab {
     ) -> Self {
         let focus = cx.focus_handle();
         let subscriptions = vec![
-            cx.on_focus_in(&focus, window, |tab, _, cx| tab.report_focus(true, cx)),
-            cx.on_focus_out(&focus, window, |tab, _, _, cx| tab.report_focus(false, cx)),
+            cx.on_focus_in(&focus, window, |tab, window, cx| {
+                tab.report_focus(true, cx);
+                tab.restart_blink(window, cx);
+            }),
+            cx.on_focus_out(&focus, window, |tab, _, window, cx| {
+                tab.report_focus(false, cx);
+                tab.restart_blink(window, cx);
+            }),
+            cx.observe_window_visibility(window, |tab, _, window, cx| {
+                tab.restart_blink(window, cx)
+            }),
         ];
         let blank = Size::new(1, Size::MIN_COLUMNS).expect("the minimum size is valid");
         Self {
@@ -125,6 +149,12 @@ impl TerminalTab {
             marked_text: None,
             status: TabStatus::Attaching,
             resize: None,
+            blink: CursorBlink {
+                cycle: theme.duration(DurationToken::MotionIndicator),
+                shown: true,
+                generation: 0,
+                _clock: None,
+            },
             measurement,
             _subscriptions: subscriptions,
         }
@@ -145,6 +175,7 @@ impl TerminalTab {
     /// Takes the colours and fonts of a new theme.
     pub fn set_theme(&mut self, theme: &DesktopTheme, cx: &mut Context<Self>) {
         self.style = terminal_style(theme);
+        self.blink.cycle = theme.duration(DurationToken::MotionIndicator);
         self.caches.glyphs.borrow_mut().clear();
         cx.notify();
     }
@@ -168,11 +199,10 @@ impl TerminalTab {
     }
 
     /// Attaches, or gives the session a new size after the debounce time.
-    fn follow_layout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn follow_layout(&mut self, cx: &mut Context<Self>) {
         let layout = self.caches.layout.get();
+        // No layout yet: the element renders the view again after the first.
         let Some(size) = Size::new(layout.rows, layout.columns) else {
-            // No layout yet: render again after the first one.
-            cx.on_next_frame(window, |_, _, cx| cx.notify());
             return;
         };
         match &self.attach {
@@ -243,6 +273,47 @@ impl TerminalTab {
         self.scrolled = snapshot.scrolled();
         self.snapshot = Arc::new(snapshot);
         self.generation += 1;
+    }
+
+    /// The setting of reduced motion changed.
+    pub fn motion_changed(&mut self, window: &Window, cx: &mut Context<Self>) {
+        self.restart_blink(window, cx);
+        cx.notify();
+    }
+
+    /// Shows the cursor and starts its blink again, if it blinks.
+    fn restart_blink(&mut self, window: &Window, cx: &mut Context<Self>) {
+        self.blink.generation = self.generation;
+        self.blink.shown = true;
+        let blinking = self
+            .snapshot
+            .visible_cursor()
+            .is_some_and(|cursor| cursor.blinking);
+        let motion = MotionContext {
+            window_visible: window.is_visible(),
+            reduce_motion: cx.reduce_motion(),
+        };
+        if !(blinking && self.focus.is_focused(window) && motion.allows_motion()) {
+            self.blink._clock = None;
+            return;
+        }
+        let started = Instant::now();
+        let cycle = self.blink.cycle;
+        self.blink._clock = Some(cx.spawn(async move |tab, cx| {
+            loop {
+                let phase = blink_phase(started.elapsed(), cycle);
+                let updated = tab.update(cx, |tab, cx| {
+                    if tab.blink.shown != phase.shown {
+                        tab.blink.shown = phase.shown;
+                        cx.notify();
+                    }
+                });
+                let (Ok(()), Some(wait)) = (updated, phase.next_change) else {
+                    return;
+                };
+                cx.background_executor().timer(wait).await;
+            }
+        }));
     }
 
     fn report_focus(&mut self, focused: bool, cx: &mut Context<Self>) {
@@ -490,8 +561,11 @@ impl Focusable for TerminalTab {
 
 impl Render for TerminalTab {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.follow_layout(window, cx);
+        self.follow_layout(cx);
         self.take_snapshot();
+        if self.blink.generation != self.generation {
+            self.restart_blink(window, cx);
+        }
         if let Some(measurement) = &self.measurement {
             measurement.frame(&self.caches, &self.snapshot, self.generation);
         }
@@ -500,6 +574,7 @@ impl Render for TerminalTab {
             generation: self.generation,
             selection: self.selection,
             marked_text: self.marked_text.clone().map(SharedString::from),
+            cursor_shown: self.blink.shown,
         };
         let element = TerminalElement::new(
             frame,

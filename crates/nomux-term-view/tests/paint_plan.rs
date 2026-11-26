@@ -3,7 +3,9 @@
 
 use gpui::{Hsla, Rgba};
 use nomux_term::{Size, Terminal};
-use nomux_term_view::{GridPoint, GridSelection, PaintPlan, TerminalPalette, TerminalSnapshot};
+use nomux_term_view::{
+    CursorState, GridPoint, GridSelection, PaintPlan, TerminalPalette, TerminalSnapshot,
+};
 
 fn color(red: u8) -> Hsla {
     Rgba {
@@ -40,7 +42,7 @@ fn cells_of_one_background_make_one_run() {
         10,
         "\x1b[41m    \x1b[0m  \x1b[42m  \x1b[0m\r\n\x1b[41m \x1b[0m",
     );
-    let plan = PaintPlan::build(&screen, &palette(), None, true);
+    let plan = PaintPlan::build(&screen, &palette(), None, cursor(true));
     let runs: Vec<(u16, u16, u16)> = plan
         .backgrounds
         .iter()
@@ -55,7 +57,7 @@ fn cells_of_one_background_make_one_run() {
 #[test]
 fn inverse_paints_the_text_colour_as_background_and_hidden_text_paints_nothing() {
     let screen = snapshot(2, 10, "\x1b[7mab\x1b[0m\x1b[8mcd\x1b[0m");
-    let plan = PaintPlan::build(&screen, &palette(), None, false);
+    let plan = PaintPlan::build(&screen, &palette(), None, cursor(false));
     assert_eq!(plan.backgrounds.len(), 1);
     assert_eq!(plan.backgrounds[0].len, 2);
     assert_eq!(plan.backgrounds[0].color, palette().foreground);
@@ -67,7 +69,7 @@ fn inverse_paints_the_text_colour_as_background_and_hidden_text_paints_nothing()
 #[test]
 fn a_wide_character_paints_one_glyph_and_the_cursor_covers_two_columns() {
     let screen = snapshot(2, 10, "a漢字b\x1b[1;2H");
-    let plan = PaintPlan::build(&screen, &palette(), None, true);
+    let plan = PaintPlan::build(&screen, &palette(), None, cursor(true));
     let columns: Vec<u16> = plan.glyphs.iter().map(|glyph| glyph.column).collect();
     assert_eq!(columns, [0, 1, 3, 5]);
     let cursor = plan.cursor.expect("a visible cursor");
@@ -79,7 +81,7 @@ fn a_wide_character_paints_one_glyph_and_the_cursor_covers_two_columns() {
 #[test]
 fn a_hidden_cursor_is_not_painted_and_lines_merge_into_runs() {
     let screen = snapshot(2, 10, "\x1b[?25l\x1b[4mabc\x1b[0m d\x1b[9mef\x1b[0m");
-    let plan = PaintPlan::build(&screen, &palette(), None, true);
+    let plan = PaintPlan::build(&screen, &palette(), None, cursor(true));
     assert!(plan.cursor.is_none());
     let lines: Vec<(u16, u16)> = plan
         .lines
@@ -96,7 +98,7 @@ fn a_selection_paints_one_run_for_each_row_and_copies_trimmed_lines() {
         anchor: GridPoint { row: 2, column: 2 },
         head: GridPoint { row: 0, column: 3 },
     };
-    let plan = PaintPlan::build(&screen, &palette(), Some(&selection), true);
+    let plan = PaintPlan::build(&screen, &palette(), Some(&selection), cursor(true));
     let runs: Vec<(u16, u16, u16)> = plan
         .selection
         .iter()
@@ -120,4 +122,11 @@ fn the_view_shows_history_rows_above_the_screen() {
     // A scroll past the history stops at its oldest row.
     let clamped = TerminalSnapshot::capture(&terminal.screen(), 10);
     assert_eq!(clamped.scrolled(), 2);
+}
+
+fn cursor(focused: bool) -> CursorState {
+    CursorState {
+        focused,
+        shown: true,
+    }
 }

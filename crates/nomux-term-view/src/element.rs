@@ -19,7 +19,7 @@ use gpui::{
 use nomux_term::CursorShape;
 
 use crate::glyph_cache::{GlyphCache, GlyphKey, PositionedGlyph};
-use crate::paint_plan::{CellRun, CursorMark, LineKind, PaintPlan};
+use crate::paint_plan::{CellRun, CursorMark, CursorState, LineKind, PaintPlan};
 use crate::palette::TerminalPalette;
 use crate::selection::{GridPoint, GridSelection};
 use crate::snapshot::TerminalSnapshot;
@@ -115,6 +115,8 @@ pub struct TerminalFrame {
     pub selection: Option<GridSelection>,
     /// The text of an IME composition, drawn at the cursor.
     pub marked_text: Option<SharedString>,
+    /// `false` in the hidden half of a blink cycle.
+    pub cursor_shown: bool,
 }
 
 /// The state that lives longer than one frame: shared by the view and its
@@ -407,10 +409,18 @@ impl<V: EntityInputHandler> Element for TerminalElement<V> {
         bounds: Bounds<Pixels>,
         _request_layout: &mut Self::RequestLayoutState,
         window: &mut Window,
-        _cx: &mut App,
+        cx: &mut App,
     ) -> Self::PrepaintState {
         let layout = self.grid_layout(bounds, window);
-        self.caches.layout.set(layout);
+        let previous = self.caches.layout.replace(layout);
+        // The view follows the grid size (the size of the session): a new
+        // size renders it again.
+        if (previous.rows, previous.columns) != (layout.rows, layout.columns) {
+            let view = self.view.downgrade();
+            cx.defer(move |cx| {
+                let _ = view.update(cx, |_, cx| cx.notify());
+            });
+        }
         layout
     }
 
@@ -431,7 +441,10 @@ impl<V: EntityInputHandler> Element for TerminalElement<V> {
             &self.frame.snapshot,
             &self.style.palette,
             self.frame.selection.as_ref(),
-            focused,
+            CursorState {
+                focused,
+                shown: self.frame.cursor_shown,
+            },
         );
         let mut quads = 1;
         self.paint_runs(&plan.backgrounds, layout, window, &mut quads);
