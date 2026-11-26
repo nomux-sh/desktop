@@ -19,6 +19,7 @@ mod tab_bar;
 mod tab_state;
 mod terminal_tab;
 mod terminal_tabs;
+mod title_bar;
 mod workbench;
 
 use gpui::{
@@ -27,6 +28,7 @@ use gpui::{
 };
 
 pub use host_connection::{HostConnection, HostRequest, HostUpdate};
+use nomux_desktop_theme::DesktopTheme;
 pub use terminal_tab::{Copy, Paste, TerminalTab};
 pub use workbench::{Appearance, Workbench};
 
@@ -168,7 +170,10 @@ pub fn open_window(
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         titlebar: Some(TitlebarOptions {
             title: Some("nomux".into()),
-            ..TitlebarOptions::default()
+            appears_transparent: title_bar::TRANSPARENT,
+            // The two nomux themes have the same lengths.
+            traffic_light_position: title_bar::TRANSPARENT
+                .then(|| title_bar::window_buttons(&DesktopTheme::for_appearance(true))),
         }),
         app_id: Some("sh.nomux.desktop".to_owned()),
         ..WindowOptions::default()

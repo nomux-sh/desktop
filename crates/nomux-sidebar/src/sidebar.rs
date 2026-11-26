@@ -45,6 +45,9 @@ struct Header {
 pub struct SidebarView {
     theme: DesktopTheme,
     header: Option<Header>,
+    /// The x of the header text from the left edge of the sidebar, if
+    /// something of the window covers the start of the header.
+    header_start: Option<Pixels>,
     rows: Vec<Entity<SessionRowView>>,
     on_row: ClickHandler<String>,
     on_new_session: ClickHandler<()>,
@@ -61,6 +64,7 @@ impl SidebarView {
         Self {
             theme,
             header: None,
+            header_start: None,
             rows: Vec::new(),
             on_row,
             on_new_session,
@@ -102,6 +106,16 @@ impl SidebarView {
         }
         changed |= !old_rows.is_empty();
         if changed {
+            cx.notify();
+        }
+    }
+
+    /// Moves the header text to `start` from the left edge of the sidebar,
+    /// for the window buttons of a transparent title bar. `None`, or a
+    /// start before `density.*.padding`, keeps the text at the padding.
+    pub fn set_header_start(&mut self, start: Option<Pixels>, cx: &mut Context<Self>) {
+        if self.header_start != start {
+            self.header_start = start;
             cx.notify();
         }
     }
@@ -155,12 +169,12 @@ impl Render for SidebarView {
             .h_full()
             .overflow_y_scroll()
             .bg(theme.color(ColorToken::SurfaceBase))
-            .px(theme.length(LengthToken::Space1))
+            .p(theme.length(LengthToken::Space1))
             .flex()
             .flex_col()
             .when_some(self.header.as_ref(), |sidebar, header| {
                 sidebar
-                    .child(painter.header(header))
+                    .child(painter.header(header, self.header_start))
                     .child(div().h(theme.length(LengthToken::Space2)).flex_none())
                     .when(header.empty, |sidebar| {
                         sidebar.child(painter.empty(&self.on_new_session))
@@ -254,16 +268,17 @@ impl SidebarPainter<'_> {
             .font_features(FontFeatures(Arc::new(vec![("tnum".into(), 1)])))
     }
 
-    fn header(&self, content: &Header) -> impl IntoElement {
+    fn header(&self, content: &Header, start: Option<Pixels>) -> impl IntoElement {
         let theme = self.theme;
         let metrics = theme.metrics();
         let space_1 = theme.length(LengthToken::Space1);
+        let start = start.map_or(metrics.padding, |start| start.max(metrics.padding));
         div()
             .flex()
             .flex_none()
             .items_center()
             .h(metrics.row_height)
-            .pl(metrics.padding - space_1)
+            .pl(start - space_1)
             .pr(space_1)
             .gap(theme.length(LengthToken::Space2))
             .child(
