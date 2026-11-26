@@ -17,7 +17,7 @@ use nomux_desktop_theme::{ColorToken, DesktopTheme, DurationToken, LengthToken, 
 use nomux_term::Size;
 use nomux_term_view::input::{self, MouseAction, MouseReport};
 use nomux_term_view::{
-    GridSelection, TerminalCaches, TerminalElement, TerminalFrame, TerminalPalette,
+    GridSelection, PaintStats, TerminalCaches, TerminalElement, TerminalFrame, TerminalPalette,
     TerminalSnapshot, TerminalStyle,
 };
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
@@ -190,6 +190,12 @@ impl TerminalTab {
         }
     }
 
+    /// The last paint of the terminal element.
+    #[must_use]
+    pub fn paint_stats(&self) -> Option<PaintStats> {
+        self.caches.stats.get()
+    }
+
     /// The size of the grid of the last layout, `None` before the first.
     #[must_use]
     pub fn grid_size(&self) -> Option<Size> {
@@ -284,8 +290,11 @@ impl TerminalTab {
     }
 
     fn apply(&mut self, update: TabUpdate, cx: &mut Context<Self>) {
+        if let (TabUpdate::Changed(changed_at), Some(measurement)) = (&update, &self.measurement) {
+            measurement.change_received(*changed_at);
+        }
         self.status = match update {
-            TabUpdate::Changed | TabUpdate::Reconnected => TabStatus::Live,
+            TabUpdate::Changed(_) | TabUpdate::Reconnected => TabStatus::Live,
             TabUpdate::ConnectionLost => TabStatus::ConnectionLost,
             TabUpdate::Ended(end) => TabStatus::Ended(end),
             TabUpdate::Failed(message) => TabStatus::Failed(message),
@@ -308,6 +317,9 @@ impl TerminalTab {
         self.scrolled = snapshot.scrolled();
         self.snapshot = Arc::new(snapshot);
         self.generation += 1;
+        if let Some(measurement) = &self.measurement {
+            measurement.snapshot_taken();
+        }
     }
 
     /// The setting of reduced motion changed.
