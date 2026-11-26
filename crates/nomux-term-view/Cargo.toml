@@ -1,0 +1,17 @@
+[package]
+name = "nomux-term-view"
+description = "The GPUI terminal element of the nomux desktop client: paints a snapshot of nomux-term and encodes the input."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+gpui.workspace = true
+nomux-term.workspace = true
+
+[lints]
+workspace = true
