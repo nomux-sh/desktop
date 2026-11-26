@@ -1,0 +1,50 @@
+# cargo-deny configuration. Run `cargo deny check`.
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+# A license that is not in this list fails the check. Thus GPL, AGPL and LGPL
+# dependencies are denied: the list is the only permitted set.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "MPL-2.0",
+    "Unicode-3.0",
+]
+confidence-threshold = 0.93
+# The list is the same in all nomux repositories. Not all licenses occur in
+# the dependencies of this repository.
+unused-allowed-license = "allow"
+# One crate of the GPUI tree on Linux needs CC0-1.0: tiny-keccak, through
+# const-random, ahash and zed-xim (the X11 input method of gpui-pre-linux).
+exceptions = [{ allow = ["CC0-1.0"], crate = "tiny-keccak" }]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# The crates of this workspace depend on each other by path. None is published.
+allow-wildcard-paths = true
+# Each GPUI line has its own types: two lines in one build do not work
+# together. The client uses only the `gpui-pre` line.
+deny = [
+    { name = "gpui" },
+    { name = "bezel-gpui" },
+    { name = "gpui-fast" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# nomux-client and nomux-term are not on crates.io yet.
+allow-git = ["https://github.com/nomux-sh/nomux"]
