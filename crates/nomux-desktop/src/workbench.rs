@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, AnyView, AppContext, Context, Entity, Focusable, InteractiveElement, IntoElement,
     ParentElement, Render, StatefulInteractiveElement, StyleRefinement, Styled, Subscription, Task,
@@ -25,6 +26,7 @@ use crate::measure::Measurement;
 use crate::tab_bar::TabHandler;
 use crate::terminal_tab::TerminalTab;
 use crate::terminal_tabs::TerminalTabs;
+use crate::title_bar;
 use crate::{
     ActivateLastTab, ActivateTab1, ActivateTab2, ActivateTab3, ActivateTab4, ActivateTab5,
     ActivateTab6, ActivateTab7, ActivateTab8, CloseTab, MoveTabLeft, MoveTabRight, NewSession,
@@ -68,6 +70,9 @@ pub struct Workbench {
     rail: Entity<RailView>,
     sidebar: Entity<SidebarView>,
     tabs: TerminalTabs,
+    /// `true` while the window shows the title bar line of a transparent
+    /// title bar.
+    title_bar_shown: bool,
     /// `true` after the first list of the sessions.
     loaded: bool,
     main_area: Option<MainArea>,
@@ -121,6 +126,9 @@ impl Workbench {
             cx.observe_window_visibility(window, |workbench, _, window, cx| {
                 workbench.sync_clock(window, cx);
             }),
+            cx.observe_window_bounds(window, |workbench, window, cx| {
+                workbench.follow_title_bar(window, cx);
+            }),
         ];
         let theme = DesktopTheme::for_appearance(is_dark(appearance, window.appearance()));
         let on_tile: ClickHandler<TileTarget> = Self::handler(cx, Self::click_tile);
@@ -145,6 +153,8 @@ impl Workbench {
             (on_activate, on_close),
             cx,
         );
+        let title_bar_shown = title_bar::shown(window);
+        let header_start = title_bar_shown.then(|| title_bar::header_start(&theme));
         Self {
             theme,
             appearance,
@@ -152,8 +162,13 @@ impl Workbench {
             selection: Selection::default(),
             connection,
             rail: cx.new(|_| RailView::new(theme, on_tile)),
-            sidebar: cx.new(|_| SidebarView::new(theme, on_row, on_new)),
+            sidebar: cx.new(|cx| {
+                let mut sidebar = SidebarView::new(theme, on_row, on_new);
+                sidebar.set_header_start(header_start, cx);
+                sidebar
+            }),
             tabs,
+            title_bar_shown,
             loaded: false,
             main_area: None,
             clock: None,
@@ -164,6 +179,20 @@ impl Workbench {
             _tasks: vec![updates_task, ages_task],
             _subscriptions: subscriptions,
         }
+    }
+
+    /// Shows or hides the title bar line: full screen hides the window
+    /// buttons.
+    fn follow_title_bar(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let shown = title_bar::shown(window);
+        if shown == self.title_bar_shown {
+            return;
+        }
+        self.title_bar_shown = shown;
+        let start = shown.then(|| title_bar::header_start(&self.theme));
+        self.sidebar
+            .update(cx, |sidebar, cx| sidebar.set_header_start(start, cx));
+        cx.notify();
     }
 
     /// The sidebar view.
@@ -530,6 +559,52 @@ fn now_ms() -> u64 {
         })
 }
 
+impl Workbench {
+    /// The rail, below the window buttons while the title bar line shows.
+    fn rail_column(&self) -> impl IntoElement {
+        let theme = &self.theme;
+        let width = nomux_sidebar::rail_width(theme);
+        div()
+            .flex_none()
+            .flex()
+            .flex_col()
+            .w(width)
+            .h_full()
+            .bg(theme.color(ColorToken::SurfaceSunken))
+            .when(self.title_bar_shown, |column| {
+                column.child(title_bar::drag_region(
+                    div().flex_none().w_full().h(title_bar::height(theme)),
+                ))
+            })
+            .child(
+                AnyView::from(self.rail.clone())
+                    .cached(StyleRefinement::default().w(width).flex_1().min_h_0()),
+            )
+    }
+
+    /// The sidebar. Its header is a part of the title bar while the title
+    /// bar line shows: the header has no control.
+    fn sidebar_column(&self) -> impl IntoElement {
+        div()
+            .relative()
+            .flex_none()
+            .h_full()
+            // Not cached: a cached view that renders again renders each
+            // cached view in it again. The rows in it are cached.
+            .child(self.sidebar.clone())
+            .when(self.title_bar_shown, |column| {
+                column.child(title_bar::drag_region(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .h(title_bar::height(&self.theme)),
+                ))
+            })
+    }
+}
+
 impl Render for Workbench {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if let Some(measurement) = &self.measurement {
@@ -537,7 +612,6 @@ impl Render for Workbench {
             window.on_next_frame(move |_, _| measurement.window_painted());
         }
         let theme = self.theme;
-        let full_height = || StyleRefinement::default().h_full().flex_none();
         div()
             .key_context(KEY_CONTEXT)
             .on_action(cx.listener(|workbench, _: &NewSession, _, _| workbench.new_session()))
@@ -577,13 +651,8 @@ impl Render for Workbench {
             .flex()
             .bg(theme.color(ColorToken::SurfaceBase))
             .text_color(theme.color(ColorToken::TextPrimary))
-            .child(
-                AnyView::from(self.rail.clone())
-                    .cached(full_height().w(nomux_sidebar::rail_width(&theme))),
-            )
-            // Not cached: a cached view that renders again renders each
-            // cached view in it again. The rows in it are cached.
-            .child(self.sidebar.clone())
+            .child(self.rail_column())
+            .child(self.sidebar_column())
             .child(self.main_area(cx))
     }
 }

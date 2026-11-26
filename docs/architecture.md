@@ -74,7 +74,7 @@ The main area has one terminal tab for each open session. `Tabs` in the model ho
 | Move the active tab to the left, to the right | Cmd-Shift-Left, Cmd-Shift-Right | Ctrl-Shift-PageUp, Ctrl-Shift-PageDown |
 | Tab 1 to 8, the last tab | Cmd-1 to Cmd-8, Cmd-9 | Alt-1 to Alt-8, Alt-9 |
 | Open a session in a new tab | Cmd-click on its row | Ctrl-click on its row |
-| Close a tab | the close mark of the active tab, or a middle click | the same |
+| Close a tab | the close mark, which takes the place of the state glyph below the pointer, or a middle click | the same |
 
 On Linux, Alt-1 to Alt-9 go to the tabs, not to the program in the terminal, as in GNOME Terminal.
 
@@ -134,4 +134,4 @@ The client uses `nomux Dark` and `nomux Light` from `nomux-theme` and follows th
 
 The reference picture is the preview page of the themes (`nomux-theme preview`): the window follows its "Workspace" figure. The tab bar, the line `line.divider` between the sidebar and the pane, the terminal padding `space.3`, and the terminal row height come from it. The row height of the terminal is 1.5 × `font.code.size`, the value of the terminal of the preview page; `nomux-theme` 0.3.1 has no token for it, thus it is one function of the theme crate (`terminal_line_height`).
 
-On macOS the window has the title bar of the system, with the title "nomux". The specification has no title bar region: the window buttons of macOS (about 70 px wide) do not fit in the rail (52 px), and a transparent title bar needs a band above the sidebar header and the tab bar that the specification does not define.
+On macOS the window has a transparent title bar (`title_bar.rs`): the surfaces of the theme reach the top edge of the window. The window buttons sit at the top of the project rail, at the left edge of the rail tiles, centred on the line of the tab bar. The rail starts below that line, and the sidebar header text starts after the window buttons (they are 60 pt wide on macOS 26, wider than the rail). Where the line has no control (the top of the rail, the sidebar header, the tab bar after the last Tab) it is the title bar: a drag moves the window, and a double click does the action of the system setting (zoom, minimize or nothing). In full screen the window buttons are hidden, and the rail and the sidebar header go back to the positions of the specification. Linux keeps the title bar of the system.

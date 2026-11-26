@@ -4,10 +4,13 @@
 //! `space.2` at the sides; a Tab is `control-height` high with
 //! `radius.button`; the active Tab is one tone step up (`surface.raised`) in
 //! `text.primary` with the accent line of `focus.ring-width` at its bottom.
-//! No colour except the state glyph.
+//! No colour except the state glyph. Below the pointer the close mark takes
+//! the place of the state glyph, as in Safari, thus a Tab at rest has no
+//! empty place. The track after the last Tab is a part of the title bar.
 
 use std::rc::Rc;
 
+use gpui::Pixels;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, Context, ElementId, InteractiveElement, IntoElement, MouseButton, ParentElement, Render,
@@ -16,6 +19,13 @@ use gpui::{
 use nomux_desktop_model::TabItem;
 use nomux_desktop_theme::{ColorToken, DesktopTheme, LengthToken, TextStyle};
 use nomux_sidebar::{Mark, mark};
+
+use crate::title_bar;
+
+/// The height of the tab bar: a Tab and `space.1` above and below it.
+pub(crate) fn tab_bar_height(theme: &DesktopTheme) -> Pixels {
+    theme.metrics().control_height + theme.length(LengthToken::Space1) * 2.0
+}
 
 /// What a click on a Tab does.
 pub(crate) type TabHandler = Rc<dyn Fn(&str, &mut Window, &mut App)>;
@@ -110,40 +120,47 @@ impl TabBarView {
             })
             .child(
                 div()
-                    .flex()
+                    .relative()
                     .flex_none()
-                    .items_center()
-                    .justify_center()
                     .size(theme.length(LengthToken::SizeIcon))
-                    .child(mark(
-                        Mark::State(item.state),
-                        theme.length(LengthToken::SizeMark),
-                        theme,
-                        turning,
-                    )),
+                    .child(
+                        div()
+                            .size_full()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .group_hover(group.clone(), |style| style.invisible())
+                            .child(mark(
+                                Mark::State(item.state),
+                                theme.length(LengthToken::SizeMark),
+                                theme,
+                                turning,
+                            )),
+                    )
+                    .child(self.close_button(item, group)),
             )
             .child(item.title.clone())
-            .child(self.close_button(item, group))
     }
 
-    /// The close mark: below the pointer only, in `text.muted`, as the
-    /// actions of a row. It keeps its place at rest, thus the Tab does not
-    /// change its width.
+    /// The close mark in the slot of the state glyph: below the pointer
+    /// only, in `text.secondary`, as the actions of a row. A hidden mark
+    /// takes no click.
     fn close_button(&self, item: &TabItem, group: String) -> impl IntoElement {
         let theme = &self.theme;
         let id = item.session_id.clone();
         let on_close = self.on_close.clone();
         let hover = theme.color(ColorToken::FillHover);
-        let muted = theme.color(ColorToken::TextMuted);
         div()
             .id(ElementId::Name(format!("close-{}", item.session_id).into()))
+            .absolute()
+            .inset_0()
             .flex()
             .items_center()
             .justify_center()
-            .size(theme.length(LengthToken::SizeIcon))
             .rounded(theme.length(LengthToken::RadiusButton))
-            .text_color(gpui::transparent_black())
-            .group_hover(group, move |style| style.text_color(muted))
+            .text_color(theme.color(ColorToken::TextSecondary))
+            .invisible()
+            .group_hover(group, |style| style.visible())
             .hover(move |style| style.bg(hover))
             .on_click(move |_, window, cx| {
                 cx.stop_propagation();
@@ -165,10 +182,13 @@ impl Render for TabBarView {
             .flex()
             .items_center()
             .gap(space_1)
-            .h(theme.metrics().control_height + space_1 * 2.0)
+            .h(tab_bar_height(theme))
             .px(theme.length(LengthToken::Space2))
             .overflow_x_scroll()
             .bg(theme.color(ColorToken::SurfaceSunken))
             .children(self.items.iter().map(|item| self.tab(item, turning)))
+            .child(title_bar::drag_region(
+                div().id("tab-bar-title").flex_1().h_full(),
+            ))
     }
 }
