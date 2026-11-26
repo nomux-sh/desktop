@@ -56,6 +56,17 @@ pub struct SessionRow {
     pub selected: bool,
 }
 
+impl SessionRow {
+    /// `true` if the row shows the working glyph: the glyph turns.
+    #[must_use]
+    pub fn animates(&self) -> bool {
+        self.state == GlyphState::Working
+            || self
+                .children
+                .is_some_and(|(state, _)| state == GlyphState::Working)
+    }
+}
+
 /// The title of the sidebar when it shows the sessions without a Project.
 pub const UNASSIGNED_TITLE: &str = "No project";
 
