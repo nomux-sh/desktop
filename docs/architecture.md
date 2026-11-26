@@ -110,6 +110,20 @@ The rules above make a frame without a change unnecessary. Whether the UI thread
 | macOS 14 and later | A `CAMetalDisplayLink` that pauses after an update that did not draw and did not ask for a frame (`MetalFrames::end_frame` in `src/display_link.rs`). | None. |
 | macOS 12 and 13 | The shared `CVDisplayLink` while the window is visible. | One for each refresh, as on X11. |
 
+### Key to paint
+
+A key goes to the daemon at once, and the echo wakes the UI at once. The frame waits for the next update of the frame source: on macOS 14 and later GPUI draws only inside an update of the `CAMetalDisplayLink` (`MetalRenderer::draw` skips a frame drawn outside it). Thus the time from a key to its paint is the work of the client (about 2 ms) plus the wait for the next frame of the display (from 0 to one frame period, half of it on average). The client has no batch clock that delays a frame.
+
+### Memory
+
+The footprint of the client on macOS has three parts:
+
+- The drawables of the toolkit: `CAMetalLayer` keeps up to 3 drawables and one is on the screen, each the size of the window in device pixels at 4 bytes for each pixel (64 MB for a window of 1280 × 800 pt on a Retina display, 48 MB for 1100 × 700 pt).
+- While frames draw, the Metal driver keeps about 52 MB more of GPU memory. It gives it back 10 to 15 s after the last frame. Any animation that draws a frame more often than that keeps it: the working glyph, a blinking cursor, output.
+- The heap: about 17 MB for a window with one tab, and the terminal grid of each tab. The grid of a tab grows in steps of 1000 rows when the output scrolls, to 5000 history rows: about 2.8 MB for each step at 119 columns.
+
+The budget of the desktop client is an idle footprint of at most 110 MB for a window of 1280 × 800 pt on a Retina display with 3 tabs, of which 48 to 64 MB are the drawables of the toolkit, and at most 3 MB of heap for each tab above an empty window.
+
 ### Tests
 
 - `nomux-sidebar/tests/row_paints.rs` counts the paints of each Session row for a sequence of events of the host: only the row whose values changed paints, a tick of the clock paints only the working row, and a frame without a change paints nothing.
