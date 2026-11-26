@@ -79,6 +79,9 @@ pub struct TerminalTab {
     marked_text: Option<String>,
     status: TabStatus,
     resize: Option<Task<()>>,
+    /// `false` while another tab is active: the attach feeds the terminal,
+    /// but the tab asks for no frame.
+    visible: bool,
     blink: CursorBlink,
     measurement: Option<Measurement>,
     _subscriptions: Vec<Subscription>,
@@ -149,6 +152,7 @@ impl TerminalTab {
             marked_text: None,
             status: TabStatus::Attaching,
             resize: None,
+            visible: true,
             blink: CursorBlink {
                 cycle: theme.duration(DurationToken::MotionIndicator),
                 shown: true,
@@ -170,6 +174,35 @@ impl TerminalTab {
     #[must_use]
     pub fn snapshot(&self) -> &TerminalSnapshot {
         &self.snapshot
+    }
+
+    /// Shows or hides the tab. A hidden tab keeps its attach: the
+    /// connection thread feeds its terminal, and the tab paints nothing and
+    /// runs no clock until it is shown again.
+    pub fn set_visible(&mut self, visible: bool, window: &Window, cx: &mut Context<Self>) {
+        if self.visible == visible {
+            return;
+        }
+        self.visible = visible;
+        self.restart_blink(window, cx);
+        if visible {
+            cx.notify();
+        }
+    }
+
+    /// The size of the grid of the last layout, `None` before the first.
+    #[must_use]
+    pub fn grid_size(&self) -> Option<Size> {
+        let layout = self.caches.layout.get();
+        Size::new(layout.rows, layout.columns)
+    }
+
+    /// Attaches with `size` if the tab has no attach: a hidden tab has no
+    /// layout of its own.
+    pub fn ensure_attached(&mut self, size: Size, cx: &mut Context<Self>) {
+        if self.attach.is_none() {
+            self.start_attach(size, cx);
+        }
     }
 
     /// Takes the colours and fonts of a new theme.
@@ -257,7 +290,9 @@ impl TerminalTab {
             TabUpdate::Ended(end) => TabStatus::Ended(end),
             TabUpdate::Failed(message) => TabStatus::Failed(message),
         };
-        cx.notify();
+        if self.visible {
+            cx.notify();
+        }
     }
 
     /// Takes the new screen, once for each frame.
@@ -293,7 +328,7 @@ impl TerminalTab {
             window_visible: window.is_visible(),
             reduce_motion: cx.reduce_motion(),
         };
-        if !(blinking && self.focus.is_focused(window) && motion.allows_motion()) {
+        if !(blinking && self.visible && self.focus.is_focused(window) && motion.allows_motion()) {
             self.blink._clock = None;
             return;
         }
