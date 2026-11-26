@@ -119,6 +119,19 @@ The list at the top of the sidebar shows the sessions of all Projects that need 
 
 Ctrl-J is a line feed for the program in a terminal, thus Linux uses Ctrl-Shift-J.
 
+## Notifications
+
+`nomux-desktop-model::notification::Notifier` decides for each event of the host if a system notification shows. It is a pure function of the event, the state of the host, what the user looks at, and the last state that it saw for each session. The `Workbench` calls it for each event and posts the result with GPUI.
+
+- Kinds: a session that needs you, and a result that is done and not seen. A status that a program or an adapter reported counts. A guess from the prompt marks or from the foreground program, and the state that a session gets when it loses its process (`SessionRestore`), do not.
+- No notification while the window is active and its active tab shows the session.
+- The tag of a notification is the session identifier: one notification for each session, and a new one replaces the old one.
+- No notification for a state that began before the start of the client (`since_ms` is before the floor). The daemon sends an event for each change of the message, and a state that was there at the start must not notify at such an event. The floor is the start time of the client.
+- No repeat: the pair (kind, `since_ms`) of the last state is kept for each session. An event with the same pair, for example a new message, does not notify again. A new state has a new `since_ms`.
+- A click on a notification brings the window to the front and opens the tab of the session.
+- A file turns a kind off: `notify.needs-you = off` or `notify.done = off`, in `~/Library/Application Support/sh.nomux.desktop/settings` on macOS and in `$XDG_CONFIG_HOME/nomux-desktop/settings` (by default `~/.config/nomux-desktop/settings`) on Linux. The client reads it at the start.
+- Platform: `App::show_system_notification` of GPUI 0.3.14. On macOS it uses `UNUserNotificationCenter` and works from an app bundle only (GPUI skips it in a binary without a bundle). On Linux it uses the XDG notification service over D-Bus with `notify-rust`. Both are already in the dependencies of GPUI: the client adds no dependency and the lock file does not change.
+
 ## The frame budget
 
 The client does no work when nothing changes. A frame costs a wake-up of the UI thread, a layout and a paint, thus each rule below removes frames, not only paint time.

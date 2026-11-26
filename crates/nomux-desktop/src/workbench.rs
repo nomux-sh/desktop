@@ -14,11 +14,13 @@ use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, AnyView, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement,
     IntoElement, ParentElement, Pixels, Point, Render, StatefulInteractiveElement, StyleRefinement,
-    Styled, Subscription, Task, Window, WindowAppearance, div,
+    Styled, Subscription, SystemNotification, Task, Window, WindowAppearance, div,
 };
+use nomux_client::HostEvent;
 use nomux_desktop_model::attention::{attention, next_needing_you};
 use nomux_desktop_model::menu::{MenuCommand, MenuEntry, MenuTarget};
 use nomux_desktop_model::motion::{MotionContext, working_step};
+use nomux_desktop_model::notification::{Notifier, Viewing};
 use nomux_desktop_model::rail::TileTarget;
 use nomux_desktop_model::{HostState, ProjectView, Selection, rail, sidebar};
 use nomux_desktop_theme::{ColorToken, DesktopTheme, DurationToken, LengthToken, TextStyle};
@@ -31,13 +33,13 @@ use crate::rename_dialog::RenameDialog;
 use crate::tab_bar::TabHandler;
 use crate::terminal_tab::TerminalTab;
 use crate::terminal_tabs::TerminalTabs;
-use crate::title_bar;
 use crate::{
     About, ActivateLastTab, ActivateTab1, ActivateTab2, ActivateTab3, ActivateTab4, ActivateTab5,
     ActivateTab6, ActivateTab7, ActivateTab8, AddProject, CloseTab, JumpToAttention, Minimize,
     MoveTabLeft, MoveTabRight, NewSession, NewSessionInProject, NextTab, PreviousTab,
     ToggleSidebar, Zoom, about,
 };
+use crate::{settings, title_bar};
 
 /// The key context of the window, for the key bindings of the tabs.
 pub(crate) const KEY_CONTEXT: &str = "Workbench";
@@ -82,6 +84,7 @@ pub struct Workbench {
     host: HostState,
     selection: Selection,
     connection: HostConnection,
+    notifier: Notifier,
     rail: Entity<RailView>,
     sidebar: Entity<SidebarView>,
     tabs: TerminalTabs,
@@ -156,6 +159,7 @@ impl Workbench {
                 workbench.follow_title_bar(window, cx);
             }),
         ];
+        Self::open_session_on_notification_click(window, cx);
         let theme = DesktopTheme::for_appearance(is_dark(appearance, window.appearance()));
         let on_tile: ClickHandler<TileTarget> = Self::handler(cx, Self::click_tile);
         let on_row: ClickHandler<String> =
@@ -205,6 +209,7 @@ impl Workbench {
             host: HostState::default(),
             selection: Selection::default(),
             connection,
+            notifier: Notifier::new(now_ms(), settings::notifications()),
             rail: cx.new(|_| {
                 let handlers = RailHandlers {
                     on_click: on_tile,
@@ -398,6 +403,7 @@ impl Workbench {
             HostUpdate::AgentTree(tree) => self.host.set_agent_tree(tree),
             HostUpdate::Event(event) => {
                 let reload = self.host.apply_event(&event);
+                self.notify(&event, window, cx);
                 if !reload.is_empty() {
                     self.connection.send(HostRequest::Load(reload));
                 }
@@ -490,11 +496,54 @@ impl Workbench {
         let Some(id) = next_needing_you(&list, self.tabs.tabs().active()).map(str::to_owned) else {
             return;
         };
-        self.tabs.tabs_mut().open(&id);
+        self.open_session(&id, window, cx);
+    }
+
+    /// Opens the tab of a session and gives it the focus.
+    fn open_session(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.host.session(id).is_none() {
+            return;
+        }
+        self.tabs.tabs_mut().open(id);
         self.follow_active_tab(window, cx);
         if let Some(terminal) = self.tabs.active_terminal() {
             window.focus(&terminal.focus_handle(cx), cx);
         }
+    }
+
+    /// Shows a system notification if the rules of the model say so for the
+    /// event of the host.
+    fn notify(&mut self, event: &HostEvent, window: &Window, cx: &mut Context<Self>) {
+        let viewing = Viewing {
+            window_active: window.is_window_active(),
+            session: self.tabs.tabs().active(),
+        };
+        let Some(notice) = self.notifier.on_event(event, &self.host, &viewing) else {
+            return;
+        };
+        cx.show_system_notification(SystemNotification {
+            tag: notice.session_id.into(),
+            title: notice.title.into(),
+            body: notice.body.into(),
+            actions: Vec::new(),
+        });
+    }
+
+    /// A click on a notification brings the window to the front and opens
+    /// the session of the notification.
+    fn open_session_on_notification_click(window: &Window, cx: &mut Context<Self>) {
+        let workbench = cx.entity().downgrade();
+        let window = window.window_handle();
+        cx.on_system_notification_response(move |response, cx| {
+            let session_id = response.tag.to_string();
+            let workbench = workbench.clone();
+            let _ = window.update(cx, move |_, window, cx| {
+                window.activate_window();
+                let _ = workbench.update(cx, |workbench, cx| {
+                    workbench.open_session(&session_id, window, cx);
+                });
+            });
+        });
     }
 
     /// Starts a session with the shell of the user in the directory of the

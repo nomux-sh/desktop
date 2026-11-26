@@ -18,6 +18,7 @@ mod host_connection;
 pub mod measure;
 pub mod reduced_motion;
 mod rename_dialog;
+mod settings;
 mod tab_bar;
 mod tab_state;
 mod terminal_tab;

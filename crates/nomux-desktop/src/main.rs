@@ -112,6 +112,7 @@ fn main() -> ExitCode {
         if let Err(error) = fonts::load(cx) {
             eprintln!("nomux-desktop: the shipped fonts cannot be loaded: {error}");
         }
+        cx.set_app_identity("sh.nomux.desktop", "nomux");
         nomux_desktop::bind_keys(cx);
         nomux_desktop::install_menus(cx);
         cx.on_window_closed(|cx, _| {

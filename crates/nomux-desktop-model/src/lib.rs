@@ -13,6 +13,7 @@
 //! - [`daemon_support`]: whether the running daemon has what the client
 //!   needs.
 //! - [`attention`]: the sessions that need the user, across all Projects.
+//! - [`notification`]: when a session earns a system notification.
 //! - [`GlyphState`]: the state that a glyph shows, and its priority.
 //! - [`motion`]: when an animation may run, and the phase of a blinking
 //!   cursor.
@@ -25,6 +26,7 @@ mod host_state;
 mod line_editor;
 pub mod menu;
 pub mod motion;
+pub mod notification;
 pub mod rail;
 mod rail_labels;
 mod selection;
