@@ -57,6 +57,32 @@ key down ─▶ TerminalTab::on_key_down ─▶ input::key_bytes(keystroke, mode
 - A new size waits 100 ms without a further change, then goes to the attach: the attach resizes its terminal and sends the size to the daemon on a second connection, as the CLI does.
 - The attach ends when the tab drops its input sender: that is the detach. Closing the window ends the process; the sessions continue in the daemon.
 
+## Tabs
+
+The main area has one terminal tab for each open session. `Tabs` in the model holds the sequence and the active tab; `TerminalTabs` in `nomux-desktop` holds one `TerminalTab` for each of them, the tab bar and the state file. The `Workbench` routes the clicks and the key actions to them.
+
+- A click on a Session row shows the session in the active tab. With the platform modifier (Cmd on macOS, Ctrl on Linux) the click opens the session in a new tab after the active one, as in a web browser. A session is in one tab at most: a click on a session that has a tab activates that tab.
+- Closing a tab drops its `TerminalTab`, which detaches. The session continues. The tab at the right becomes active, else the one at the left.
+- Only the active tab is visible. A hidden tab keeps its attach: the connection thread feeds its terminal, and the tab asks for no frame. Its `changed` flag stays set, thus its attach wakes the UI one time until the tab is shown again, and the first frame after the switch takes one snapshot. A hidden tab that was never shown attaches with the grid size of the active tab.
+- The sidebar follows the active tab: a tab that becomes active selects its Project and its row. A click on a Project tile activates the first tab of a session of that Project; it closes no tab.
+
+| Action | macOS | Linux |
+|---|---|---|
+| New session in a new tab, in the directory of the shown Project | Cmd-T | Ctrl-Shift-T |
+| Close the active tab (the session continues) | Cmd-W | Ctrl-Shift-W |
+| Next tab, previous tab | Cmd-Shift-], Cmd-Shift-[ | Ctrl-PageDown, Ctrl-PageUp |
+| Move the active tab to the left, to the right | Cmd-Shift-Left, Cmd-Shift-Right | Ctrl-Shift-PageUp, Ctrl-Shift-PageDown |
+| Tab 1 to 8, the last tab | Cmd-1 to Cmd-8, Cmd-9 | Alt-1 to Alt-8, Alt-9 |
+| Open a session in a new tab | Cmd-click on its row | Ctrl-click on its row |
+| Close a tab | the close mark of the active tab, or a middle click | the same |
+
+On Linux, Alt-1 to Alt-9 go to the tabs, not to the program in the terminal, as in GNOME Terminal.
+
+The client writes the open tabs after each change, on a background thread, and opens them again at the next start: the tabs of sessions that ended are left out. The file has one session identifier for each line, the active one with the prefix `* `:
+
+- macOS: `~/Library/Application Support/sh.nomux.desktop/tabs`
+- Linux: `$XDG_STATE_HOME/nomux-desktop/tabs`, by default `~/.local/state/nomux-desktop/tabs`
+
 ## The frame budget
 
 The client does no work when nothing changes. A frame costs a wake-up of the UI thread, a layout and a paint, thus each rule below removes frames, not only paint time.
@@ -70,7 +96,8 @@ The client does no work when nothing changes. A frame costs a wake-up of the UI 
   - The cursor blinks only when the program asks for a blinking cursor (`DECSCUSR`), the tab has the focus, the window is visible and the user did not ask for reduced motion. One cycle is `motion.indicator`: half shown, half hidden. The blink ends with the cursor shown 10 cycles (`BLINK_CYCLES`) after the last change of the screen or of the focus.
 - **Reduced motion.** GPUI does not read the setting of the system (`App::reduce_motion` changes only with `set_reduce_motion`). The client reads it one time at the start on a background thread (`defaults read com.apple.universalaccess reduceMotion` on macOS, `gsettings get org.gnome.desktop.interface enable-animations` on Linux), and `--reduce-motion` fixes it. The window has motion until the answer arrives. With reduced motion the working glyph is the static arc and the cursor does not blink.
 - **The ages** of the sidebar are computed again one time each minute. Only a row whose age text changed renders again.
-- **Caches.** The rail, each Session row and the terminal tab are cached views (`AnyView::cached`): a frame paints them from the last frame while they were not notified and their bounds are the same. The sidebar and the `Workbench` are not cached views, because of two rules of GPUI 0.3.14: a notify marks each view above the notified one dirty (`Window::mark_view_dirty`), and a cached view that renders again renders each cached view in it again (`prepaint_view` in `view.rs` sets `refreshing`). Thus a change of one row renders the `Workbench` and the sidebar, which are small, and that row; the other rows, the rail and the terminal come from the cache.
+- **Hidden tabs** paint nothing and run no clock ("Tabs" above).
+- **Caches.** The rail, each Session row, the tab bar and the active terminal tab are cached views (`AnyView::cached`): a frame paints them from the last frame while they were not notified and their bounds are the same. The sidebar and the `Workbench` are not cached views, because of two rules of GPUI 0.3.14: a notify marks each view above the notified one dirty (`Window::mark_view_dirty`), and a cached view that renders again renders each cached view in it again (`prepaint_view` in `view.rs` sets `refreshing`). Thus a change of one row renders the `Workbench` and the sidebar, which are small, and that row; the other rows, the rail and the terminal come from the cache.
 
 ### What each platform backend does when nothing changes
 
