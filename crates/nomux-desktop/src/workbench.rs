@@ -12,9 +12,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, AnyView, AppContext, Context, Entity, Focusable, InteractiveElement, IntoElement,
-    ParentElement, Pixels, Point, Render, StatefulInteractiveElement, StyleRefinement, Styled,
-    Subscription, Task, Window, WindowAppearance, div,
+    AnyElement, AnyView, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement,
+    IntoElement, ParentElement, Pixels, Point, Render, StatefulInteractiveElement, StyleRefinement,
+    Styled, Subscription, Task, Window, WindowAppearance, div,
 };
 use nomux_desktop_model::menu::{MenuCommand, MenuEntry, MenuTarget};
 use nomux_desktop_model::motion::{MotionContext, working_step};
@@ -101,6 +101,9 @@ pub struct Workbench {
     outdated_daemon: Option<String>,
     home: Option<PathBuf>,
     sidebar_visible: bool,
+    /// The focus of the window when no terminal has it: the menu bar and
+    /// the key bindings need a focused element that handles their actions.
+    focus: FocusHandle,
     context_menu: Option<OpenMenu>,
     on_choose: ClickHandler<MenuCommand>,
     on_dismiss: ClickHandler<()>,
@@ -193,6 +196,8 @@ impl Workbench {
         );
         let title_bar_shown = title_bar::shown(window);
         let header_start = title_bar_shown.then(|| title_bar::header_start(&theme));
+        let focus = cx.focus_handle();
+        window.focus(&focus, cx);
         Self {
             theme,
             appearance,
@@ -222,6 +227,7 @@ impl Workbench {
             outdated_daemon: None,
             home: std::env::var_os("HOME").map(PathBuf::from),
             sidebar_visible: true,
+            focus,
             context_menu: None,
             on_choose,
             on_dismiss,
@@ -298,6 +304,9 @@ impl Workbench {
     fn refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.tabs
             .sync(&self.host, self.home.as_deref(), self.theme, window, cx);
+        if self.tabs.active_terminal().is_none() && self.rename.is_none() {
+            window.focus(&self.focus, cx);
+        }
         self.sync_selection();
         let tiles = rail::rail(&self.host, &self.selection);
         let content = sidebar::sidebar(
@@ -808,6 +817,7 @@ impl Render for Workbench {
                 workbench.sidebar_visible = !workbench.sidebar_visible;
                 cx.notify();
             }))
+            .track_focus(&self.focus)
             .relative()
             .size_full()
             .flex()
