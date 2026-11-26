@@ -35,11 +35,14 @@ wildcards = "deny"
 # The crates of this workspace depend on each other by path. None is published.
 allow-wildcard-paths = true
 # Each GPUI line has its own types: two lines in one build do not work
-# together. The client uses only the `gpui-pre` line.
+# together. The workspace dependencies `gpui` and `gpui_platform` in
+# Cargo.toml choose the line; this list bans the lines that are not chosen.
+# `gpui-fast` is not banned: the choice between `gpui-pre` and `gpui-fast`
+# waits for a measurement on a Mac. A change of the line edits the two
+# aliases in Cargo.toml and the line here.
 deny = [
     { name = "gpui" },
     { name = "bezel-gpui" },
-    { name = "gpui-fast" },
 ]
 
 [sources]
