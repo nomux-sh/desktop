@@ -7,6 +7,9 @@
 //! - `--reduce-motion`: no motion, also when the system setting allows it.
 //! - `--measure <file>`: runs the measurement mode and writes its report
 //!   to the file. `measure.rs` describes the scenario.
+//! - `--capture <file>`: only in a build with the feature `frame-capture`.
+//!   Writes the first frame with the text of a session to a PNG file and
+//!   ends. `capture.rs` describes it.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -20,6 +23,8 @@ struct Options {
     appearance: Appearance,
     reduce_motion: bool,
     measure: Option<PathBuf>,
+    #[cfg(feature = "frame-capture")]
+    capture: Option<PathBuf>,
 }
 
 fn parse_options() -> Result<Options, String> {
@@ -27,6 +32,8 @@ fn parse_options() -> Result<Options, String> {
         appearance: Appearance::System,
         reduce_motion: false,
         measure: None,
+        #[cfg(feature = "frame-capture")]
+        capture: None,
     };
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
@@ -42,6 +49,11 @@ fn parse_options() -> Result<Options, String> {
             "--measure" => {
                 let path = arguments.next().ok_or("--measure needs a file")?;
                 options.measure = Some(PathBuf::from(path));
+            }
+            #[cfg(feature = "frame-capture")]
+            "--capture" => {
+                let path = arguments.next().ok_or("--capture needs a file")?;
+                options.capture = Some(PathBuf::from(path));
             }
             other => return Err(format!("unknown argument `{other}`")),
         }
@@ -84,6 +96,26 @@ fn main() -> ExitCode {
             cx.set_reduce_motion(true);
         } else {
             nomux_desktop::reduced_motion::follow_system(handle, cx);
+        }
+        #[cfg(feature = "frame-capture")]
+        if let Some(file) = options.capture.clone() {
+            let _ = handle.update(cx, |_, window, cx| {
+                window
+                    .spawn(cx, async move |cx| {
+                        nomux_desktop::capture::run(
+                            file,
+                            move |cx| {
+                                handle
+                                    .read_with(cx, |workbench, _| workbench.tab().cloned())
+                                    .ok()
+                                    .flatten()
+                            },
+                            cx,
+                        )
+                        .await;
+                    })
+                    .detach();
+            });
         }
         if let Some(measurement) = measurement {
             let _ = handle.update(cx, |_, window, cx| {
