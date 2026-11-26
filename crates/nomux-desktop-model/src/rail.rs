@@ -25,6 +25,20 @@ pub struct RailTile {
     pub selected: bool,
 }
 
+impl RailTile {
+    /// `true` if the tile, or a tile in its strip, shows the working
+    /// glyph: the glyph turns.
+    #[must_use]
+    pub fn animates(&self) -> bool {
+        match &self.kind {
+            TileKind::Project { state, .. } | TileKind::ClosedGroup { state, .. } => {
+                *state == Some(GlyphState::Working)
+            }
+            TileKind::OpenGroup { children, .. } => children.iter().any(Self::animates),
+        }
+    }
+}
+
 /// What a click on a tile does.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TileTarget {

@@ -8,10 +8,13 @@
 //! - [`rail`] and [`sidebar`]: the content of the project rail and of the
 //!   sidebar, as plain data for a view.
 //! - [`GlyphState`]: the state that a glyph shows, and its priority.
+//! - [`motion`]: when an animation may run, and the phase of a blinking
+//!   cursor.
 
 mod age;
 mod glyph_state;
 mod host_state;
+pub mod motion;
 pub mod rail;
 mod rail_labels;
 mod selection;
