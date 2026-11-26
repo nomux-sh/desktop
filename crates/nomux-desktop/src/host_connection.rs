@@ -96,7 +96,7 @@ impl HostConnection {
 
 async fn serve(mut requests: UnboundedReceiver<HostRequest>, updates: UnboundedSender<HostUpdate>) {
     let report = |error: ClientError| {
-        let _ = updates.send(HostUpdate::Failed(error.to_string()));
+        let _ = updates.send(HostUpdate::Failed(failure_text(&error)));
     };
     let host = match Host::local() {
         Ok(host) => host,
@@ -129,6 +129,19 @@ async fn serve(mut requests: UnboundedReceiver<HostRequest>, updates: UnboundedS
         if let Err(error) = result {
             report(error);
         }
+    }
+}
+
+/// The text of a failure for the user. A daemon of an other version gets the
+/// command that stops it: the sessions continue without the daemon, and the
+/// next start of the client starts its own daemon.
+fn failure_text(error: &ClientError) -> String {
+    match error {
+        ClientError::VersionIncompatible(_) => format!(
+            "A daemon of an other nomux version runs: {error}. Stop it with `nomux daemon stop` \
+             (the sessions continue), then open nomux again."
+        ),
+        _ => error.to_string(),
     }
 }
 
