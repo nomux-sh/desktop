@@ -23,10 +23,50 @@ In development. Versions earlier than 1.0.0 are pre-releases: interfaces can cha
 ### What is not built yet
 
 - Worktree rows: the protocol has no worktrees yet. The Sessions are at level 1 of the tree without a worktree row above them.
-- Splits, the settings, the agent view, diffs, extensions, remote hosts, packages (`.dmg`, `.deb`), Windows.
+- Splits, the settings, the agent view, diffs, extensions, remote hosts, Linux packages (`.deb`, `.rpm`), a notarised macOS image, automatic updates, Windows.
 - Answers to the queries of a program (device attributes, cursor position, colours): `nomux-term` drops them (nomux-sh/nomux#89).
 - The kitty keyboard protocol: keys use the xterm encoding. The application keypad mode: GPUI does not tell a keypad key from the same key of the main block, thus keypad keys send the bytes of the main keys.
 - The shell chips and the team roster of the tab bar, the hover actions of a row (stop, menu), the tooltips, the expanded rail, the motion of a Group that opens, child rows of an agent, the compact density.
+
+## Install
+
+Each release has a disk image for macOS on Apple silicon (`nomux-<version>-macos-arm64.dmg`), one for macOS on Intel (`nomux-<version>-macos-x86_64.dmg`), an archive for Linux x86_64 (`nomux-desktop-<version>-x86_64-unknown-linux-gnu.tar.gz`) and `SHA256SUMS`. The releases before 1.0.0 are pre-releases.
+
+Each package has the nomux core of the same version: `nomux`, `nomuxd` and `nomux-holder` are next to the client binary (in `nomux.app/Contents/MacOS` on macOS). When no daemon runs, the client starts this `nomuxd`. Do not install the core a second time for the client.
+
+Check the download before you open it:
+
+```sh
+shasum -a 256 -c SHA256SUMS --ignore-missing
+```
+
+### First run on macOS
+
+The disk image has an ad-hoc signature and is not notarised by Apple. Thus macOS stops the first start. Do these steps one time:
+
+1. Open the disk image and drag `nomux` to `Applications`.
+2. Open `nomux` in `Applications`. macOS shows the alert "“nomux” Not Opened": Apple could not verify that the application is free of malware. Click **Done**.
+3. Open **System Settings**, then **Privacy & Security**. Scroll down to **Security**. The text says that "nomux" was blocked. Click **Open Anyway**, then give your password or Touch ID.
+4. Open `nomux` again and click **Open**. The next starts do not ask again.
+
+On macOS 14 and earlier, step 2 and 3 can also be: Control-click `nomux` in `Applications`, select **Open**, then click **Open**. macOS 15 and later do not accept this path.
+
+As an alternative to steps 2 to 4, remove the quarantine attribute in Terminal. Do this only for a disk image whose checksum you checked:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/nomux.app
+```
+
+To use the `nomux` CLI in a terminal, make a link to the CLI of the application in a directory of your `PATH`, for example:
+
+```sh
+mkdir -p ~/.local/bin
+ln -sf /Applications/nomux.app/Contents/MacOS/nomux ~/.local/bin/nomux
+```
+
+### A daemon of a different version
+
+The client and the daemon agree on a protocol version when they connect. If a daemon of an other nomux version runs (for example from Homebrew) and the two have no common protocol version, the window shows the message of the daemon and the command to stop it: `nomux daemon stop`. The sessions continue without the daemon. Open the client again: it starts its own `nomuxd`.
 
 ## Build and run
 
