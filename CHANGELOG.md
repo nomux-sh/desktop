@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [git-cliff](https://git-cliff.org) writes this file from the commit subjects.
 To see the changes that are not in a version, run `git cliff --unreleased`.
 
+## [0.1.1] - 2026-11-27
+
+### Added
+
+- Add menus, Add Project, context menus and the quit shortcut
+- List the sessions that need you across all projects
+- Show a system notification when a session needs you or is done
+
+### Fixed
+
+- Ask an older daemon to restart instead of showing a protocol error
+- Focus the window so menu items and shortcuts work with no tab
 ## [0.1.0] - 2026-11-26
 
 ### Added
@@ -44,3 +56,4 @@ To see the changes that are not in a version, run `git cliff --unreleased`.
 - Describe the tabs, their shortcuts and their state file
 - Describe the packages and the first run on macOS
 - Describe key to paint, the memory of the client and its budget
+- Describe what 0.1.0 has, its requirements and the bundled core
